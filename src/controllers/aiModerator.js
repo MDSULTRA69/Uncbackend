@@ -1,5 +1,4 @@
-const Anthropic = require('@anthropic-ai/sdk').default;
-
+const Anthropic = require('@anthropic-ai/sdk');
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const UNC_SYSTEM_PROMPT = `You are the AI Moderator (MOD) for UNC (Ultimate Ninja Championship), a Naruto-inspired text-based RPG game. You are the neutral, authoritative referee of all battles.
