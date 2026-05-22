@@ -160,7 +160,7 @@ router.post('/:id/action', auth, async (req, res) => {
 
       if (battle.player1HP <= 0 && battle.player2HP <= 0) {
         battle.isDraw = true;
-        battle.endReason = 'Both players KO'd';
+        battle.endReason = "Both players KO'd";
       } else if (battle.player1HP <= 0) {
         battle.winner = battle.player2._id;
         battle.loser = battle.player1._id;
