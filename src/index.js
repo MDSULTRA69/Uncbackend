@@ -1,4 +1,19 @@
 require('dotenv').config();
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('UNHANDLED REJECTION:', err);
+  process.exit(1);
+});
+
+console.log('Starting server...');
+console.log('MONGODB_URI set:', !!process.env.MONGODB_URI);
+console.log('JWT_SECRET set:', !!process.env.JWT_SECRET);
+console.log('ANTHROPIC_API_KEY set:', !!process.env.ANTHROPIC_API_KEY);
+
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
