@@ -12,7 +12,9 @@ router.post('/register', async (req, res) => {
   try {
     const {
       username, password, characterName, nickname, clan, village,
-      gender, characterDOB, phoneNumber
+      gender, characterDOB, phoneNumber,
+      // Existing character fields (optional)
+      rank, deck, compatibleMoves, elements, stats
     } = req.body;
 
     if (!username || !password || !characterName || !clan || !village) {
@@ -22,7 +24,7 @@ router.post('/register', async (req, res) => {
     const exists = await User.findOne({ username: username.toLowerCase() });
     if (exists) return res.status(400).json({ error: 'Username already taken' });
 
-    const user = new User({
+    const userData = {
       username: username.toLowerCase(),
       password,
       characterName,
@@ -32,8 +34,36 @@ router.post('/register', async (req, res) => {
       gender,
       characterDOB,
       phoneNumber
-    });
+    };
 
+    // Apply existing character data if provided
+    if (rank && ['Rookie', 'Genin', 'Chunin', 'Jounin', 'Kage', 'Sage', 'God'].includes(rank)) {
+      userData.rank = rank;
+    }
+    if (deck) {
+      userData.deck = deck;
+    }
+    if (compatibleMoves && Array.isArray(compatibleMoves)) {
+      userData.compatibleMoves = compatibleMoves;
+    }
+    if (elements) {
+      userData.elements = elements;
+    }
+    if (stats) {
+      userData.stats = {
+        hp: 100,
+        xp: stats.xp || 0,
+        xc: stats.xc || 0,
+        modCoins: 0,
+        gold: 0,
+        wins: stats.wins || 0,
+        losses: stats.losses || 0,
+        draws: stats.draws || 0,
+        points: stats.points || (stats.wins ? stats.wins * 3 : 0)
+      };
+    }
+
+    const user = new User(userData);
     await user.save();
     const token = generateToken(user._id);
 
@@ -80,7 +110,7 @@ router.patch('/me', auth, async (req, res) => {
     const updates = {};
     allowed.forEach(field => { if (req.body[field] !== undefined) updates[field] = req.body[field]; });
 
-    const user = await User.findByIdAndUpdate(req.user._id, updates, { new: true });
+    const user = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true });
     res.json({ user: user.toProfileJSON() });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -29,26 +29,16 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// Get player by ID
-router.get('/:id', auth, async (req, res) => {
-  try {
-    const player = await User.findById(req.params.id).select('-password -phoneNumber');
-    if (!player) return res.status(404).json({ error: 'Player not found' });
-    res.json({ player: player.toProfileJSON() });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update own deck
+// Update own deck — must be before /:id
 router.put('/me/deck', auth, async (req, res) => {
   try {
     const { deck } = req.body;
-    console.log('DECK RECEIVED:', JSON.stringify(deck, null, 2));
+    if (!deck) return res.status(400).json({ error: 'Deck data required' });
+
     const user = await User.findByIdAndUpdate(
       req.user._id,
-      { deck },
-      { new: true }
+      { $set: { deck } },
+      { new: true, runValidators: false }
     );
     res.json({ deck: user.deck, message: 'Deck updated!' });
   } catch (err) {
@@ -56,16 +46,27 @@ router.put('/me/deck', auth, async (req, res) => {
   }
 });
 
-// Update own moves (compatible/incompatible)
+// Update own moves (compatible/incompatible) — must be before /:id
 router.put('/me/moves', auth, async (req, res) => {
   try {
     const { compatibleMoves, incompatibleMoves, elements } = req.body;
     const user = await User.findByIdAndUpdate(
       req.user._id,
-      { compatibleMoves, incompatibleMoves, elements },
-      { new: true }
+      { $set: { compatibleMoves, incompatibleMoves, elements } },
+      { new: true, runValidators: false }
     );
     res.json({ user: user.toProfileJSON() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get player by ID — after /me routes
+router.get('/:id', auth, async (req, res) => {
+  try {
+    const player = await User.findById(req.params.id).select('-password -phoneNumber');
+    if (!player) return res.status(404).json({ error: 'Player not found' });
+    res.json({ player: player.toProfileJSON() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -83,11 +84,7 @@ router.patch('/:id/admin-update', adminAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only NPC can change roles' });
     }
 
-    const user = await User.findByIdAndUpdate(
-  req.user._id,
-  { $set: { deck } },
-  { new: true, runValidators: false }
-);
+    const user = await User.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true, runValidators: false });
     if (!user) return res.status(404).json({ error: 'Player not found' });
     res.json({ user: user.toProfileJSON() });
   } catch (err) {
