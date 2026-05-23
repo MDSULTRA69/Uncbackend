@@ -88,9 +88,7 @@ router.post('/login', async (req, res) => {
     const match = await user.comparePassword(password);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
-    user.lastSeen = new Date();
-    await user.save();
-
+    await User.findByIdAndUpdate(user._id, { lastSeen: new Date() });
     const token = generateToken(user._id);
     res.json({ token, user: user.toProfileJSON() });
   } catch (err) {
