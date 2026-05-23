@@ -11,8 +11,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const DeckCode = require('../models/DeckCode');
-const { auth, requireRole } = require('../middleware/auth');
-
+const { auth, adminAuth } = require('../middleware/auth');
 const router = express.Router();
 
 // ── AES HELPERS ─────────────────────────────────────────────
@@ -152,7 +151,7 @@ router.get('/my-codes', auth, async (req, res) => {
  * Kage/NPC only — confirms a code is valid and shows the card COUNT (not names).
  * Used by admins to validate a code is legit before a battle starts.
  */
-router.post('/verify', auth, requireRole(['kage', 'npc']), async (req, res) => {
+router.post('/verify', auth, adminAuth, async (req, res) => {
   try {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: 'Code required' });
