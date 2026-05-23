@@ -83,7 +83,11 @@ router.patch('/:id/admin-update', adminAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only NPC can change roles' });
     }
 
-    const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true });
+    const user = await User.findByIdAndUpdate(
+  req.user._id,
+  { $set: { deck } },
+  { new: true, runValidators: false }
+);
     if (!user) return res.status(404).json({ error: 'Player not found' });
     res.json({ user: user.toProfileJSON() });
   } catch (err) {
