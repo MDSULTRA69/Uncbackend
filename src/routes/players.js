@@ -44,6 +44,7 @@ router.get('/:id', auth, async (req, res) => {
 router.put('/me/deck', auth, async (req, res) => {
   try {
     const { deck } = req.body;
+    console.log('DECK RECEIVED:', JSON.stringify(deck, null, 2));
     const user = await User.findByIdAndUpdate(
       req.user._id,
       { deck },
