@@ -2,8 +2,7 @@ const express = require('express');
 const Battle = require('../models/Battle');
 const User = require('../models/User');
 const { auth } = require('../middleware/auth');
-const { moderateTurn, getAIRuling, generateSpinResult } = require('../controllers/aiModerator');
-
+const { moderateTurn, getAIRuling, generateSpinResult } = require('./aiModerator');
 const router = express.Router();
 
 // Create a new battle
