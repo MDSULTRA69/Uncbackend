@@ -93,7 +93,7 @@ router.post('/generate', auth, async (req, res) => {
     await DeckCode.deleteMany({ player: player._id, usedInBattle: null });
 
     // Encrypt and store
-    const encryptedDeck = encryptDeck(deck.toObject ? deck.toObject() : deck);
+    const encryptedDeck = encryptDeck(JSON.parse(JSON.stringify(deck)));
     const code = await generateUniqueCode();
 
     const deckCode = await DeckCode.create({
