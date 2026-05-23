@@ -64,7 +64,7 @@ router.post('/register', async (req, res) => {
     }
     console.log('USERDATA:', JSON.stringify(userData, null, 2));
     const user = new User(userData);
-    await user.save();
+    await user.save({ validateBeforeSave: false });
     const token = generateToken(user._id);
 
     res.status(201).json({
