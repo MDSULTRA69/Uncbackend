@@ -26,6 +26,7 @@ const adminRoutes = require('./routes/admin');
 const gameDataRoutes = require('./routes/gameData');
 
 const app = express();
+app.set('trust proxy', 1);
 
 // Rate limiting
 const limiter = rateLimit({
