@@ -16,7 +16,7 @@ const Battle = require('../models/Battle');
 const User = require('../models/User');
 const DeckCode = require('../models/DeckCode');
 const { auth } = require('../middleware/auth');
-const { moderateTurn, getAIRuling, generateSpinResult } = require('...aiModerator');
+const { moderateTurn, getAIRuling, generateSpinResult } = require('../aiModerator');
 const deckCodesRouter = require('./deckCodes');
 
 const router = express.Router();
