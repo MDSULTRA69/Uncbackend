@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const turnSchema = new mongoose.Schema({
   turnNumber: Number,
-  phase: { type: String, enum: ['attack', 'response', 'trap', 'counter', '2fa'] },
+  phase: { type: String, enum: ['attack', 'response', 'trap', 'counter', '2fa', '3fa'] },
   playerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   playerName: String,
   action: String,
@@ -60,6 +60,40 @@ const battleSchema = new mongoose.Schema({
     resumesOnTurn: Number
   }],
   activeMomentumDice: { value: Number, expiresOnTurn: Number },
+
+  // FA chain tracking (2fa, 3fa counter chains)
+  faChain: [{
+    player: String,
+    action: String,
+    faLevel: Number
+  }],
+
+  // Live board state per player (shown in mod template after each resolution)
+  boardState: {
+    player1: {
+      activated:  [String],
+      effects:    [String],
+      clones:     String,
+      summonings: [String],
+      traps:      [String]
+    },
+    player2: {
+      activated:  [String],
+      effects:    [String],
+      clones:     String,
+      summonings: [String],
+      traps:      [String]
+    }
+  },
+
+  // After-effects queue — bleed, burn, linger, poison applied between turns
+  afterEffects: [{
+    targetPlayer:  { type: String, enum: ['player1', 'player2'] },
+    effectType:    { type: String, enum: ['bleed', 'burn', 'linger', 'poison'] },
+    damage:        Number,
+    sourceName:    String,
+    expiresOnTurn: Number
+  }],
 
   winner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   loser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
