@@ -62,7 +62,7 @@ router.post('/register', async (req, res) => {
         points: stats.points || (stats.wins ? stats.wins * 3 : 0)
       };
     }
-
+    console.log('USERDATA:', JSON.stringify(userData, null, 2));
     const user = new User(userData);
     await user.save();
     const token = generateToken(user._id);
