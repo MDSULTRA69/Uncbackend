@@ -2,7 +2,8 @@ const express = require('express');
 const Battle = require('../models/Battle');
 const User = require('../models/User');
 const { auth } = require('../middleware/auth');
-const { moderateTurn, getAIRuling, generateSpinResult } = require('../aiModerator');
+const { moderateTurn, getAIRuling, generateSpinResult, buildBoardTemplate, resolveFAChain } = require('../controllers/aiModerator');
+
 const router = express.Router();
 
 // Create a new battle
@@ -110,8 +111,26 @@ router.post('/:id/action', auth, async (req, res) => {
     const actingPlayer = isPlayer1 ? battle.player1 : battle.player2;
     const opposingPlayer = isPlayer1 ? battle.player2 : battle.player1;
 
-    const { action, cardsUsed, phase } = req.body;
+    const { action, cardsUsed, phase, isFAResponse } = req.body;
     if (!action) return res.status(400).json({ error: 'Action required' });
+
+    // Ensure board state exists
+    if (!battle.boardState) {
+      battle.boardState = {
+        player1: { activated: [], effects: [], clones: null, summonings: [], traps: [] },
+        player2: { activated: [], effects: [], clones: null, summonings: [], traps: [] }
+      };
+    }
+
+    // FA chain tracking
+    const faKeywords = ['negate', 'king of luck', 'kol', 'bargain lord', 'erase', 'adrenaline', 'bulletproof'];
+    const isFA = isFAResponse || faKeywords.some(kw => action.toLowerCase().includes(kw));
+    if (isFA) {
+      if (!battle.faChain) battle.faChain = [];
+      battle.faChain.push({ player: actingPlayer.characterName, action: action.trim(), faLevel: battle.faChain.length + 1 });
+    } else {
+      battle.faChain = []; // reset FA chain on a new attack
+    }
 
     // Add player message to chat
     battle.chatLog.push({
@@ -130,6 +149,10 @@ router.post('/:id/action', auth, async (req, res) => {
       action,
       cardsUsed: cardsUsed || []
     };
+
+    // Pass player names through battle object for board template
+    battle.player1Name = battle.player1Name || battle.player1.characterName;
+    battle.player2Name = battle.player2Name || battle.player2.characterName;
 
     // Get AI moderation
     const aiResponse = await moderateTurn(battle, action, actingPlayer, opposingPlayer);
@@ -159,14 +182,15 @@ router.post('/:id/action', auth, async (req, res) => {
 
       if (battle.player1HP <= 0 && battle.player2HP <= 0) {
         battle.isDraw = true;
-        battle.endReason = "Both players KO'd";
+        battle.endReason = 'Both players KO'd';
+      } else if (battle.player1HP <= 0) {
         battle.winner = battle.player2._id;
         battle.loser = battle.player1._id;
-        battle.endReason = "Player 1 KO'd";
+        battle.endReason = 'Player 1 KO'd';
       } else if (battle.player2HP <= 0) {
         battle.winner = battle.player1._id;
         battle.loser = battle.player2._id;
-        battle.endReason = "Player 2 KO'd";
+        battle.endReason = 'Player 2 KO'd';
       } else {
         // Turn limit reached - compare damage
         const p1Damage = 100 - battle.player2HP;
