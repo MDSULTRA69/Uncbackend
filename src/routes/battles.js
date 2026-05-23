@@ -324,15 +324,15 @@ router.post('/:id/action', auth, async (req, res) => {
 
       if (battle.player1HP <= 0 && battle.player2HP <= 0) {
         battle.isDraw = true;
-        battle.endReason = 'Both players KO'd";
+        battle.endReason = "Both players KO'd";
       } else if (battle.player1HP <= 0) {
         battle.winner = battle.player2._id;
         battle.loser  = battle.player1._id;
-        battle.endReason = 'Player 1 KO'd";
+        battle.endReason = "Player 1 KO'd";
       } else if (battle.player2HP <= 0) {
         battle.winner = battle.player1._id;
         battle.loser  = battle.player2._id;
-        battle.endReason = 'Player 2 KO'd";
+        battle.endReason = "Player 2 KO'd";
       } else {
         const p1Damage = 100 - battle.player2HP;
         const p2Damage = 100 - battle.player1HP;
