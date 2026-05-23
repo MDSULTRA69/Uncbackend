@@ -1,3 +1,10 @@
+// ============================================================
+// src/models/Battle.js  (UPDATED — private deck code fields added)
+// New fields: player1DeckCode, player2DeckCode
+// These store the UNC-XXXXXX code string so the action handler
+// can verify card submissions against the locked deck.
+// ============================================================
+
 const mongoose = require('mongoose');
 
 const turnSchema = new mongoose.Schema({
@@ -22,6 +29,16 @@ const battleSchema = new mongoose.Schema({
   player2HP: { type: Number, default: 100 },
   player1Deck: Object,
   player2Deck: Object,
+
+  // ── DECK CODE FIELDS (NEW) ─────────────────────────────────
+  // Stores the UNC-XXXXXX code string if a player locked their deck.
+  // null = player is using their open saved deck (no code).
+  // The encrypted deck is stored in DeckCode collection and resolved
+  // at battle creation — player1Deck/player2Deck always holds the
+  // actual deck contents for AI moderator use, but these code strings
+  // allow the action handler to flag unlisted card usage.
+  player1DeckCode: { type: String, default: null },
+  player2DeckCode: { type: String, default: null },
 
   status: {
     type: String,
@@ -61,14 +78,14 @@ const battleSchema = new mongoose.Schema({
   }],
   activeMomentumDice: { value: Number, expiresOnTurn: Number },
 
-  // FA chain tracking (2fa, 3fa counter chains)
+  // FA chain tracking
   faChain: [{
     player: String,
     action: String,
     faLevel: Number
   }],
 
-  // Live board state per player (shown in mod template after each resolution)
+  // Live board state per player
   boardState: {
     player1: {
       activated:  [String],
@@ -86,7 +103,7 @@ const battleSchema = new mongoose.Schema({
     }
   },
 
-  // After-effects queue — bleed, burn, linger, poison applied between turns
+  // After-effects queue
   afterEffects: [{
     targetPlayer:  { type: String, enum: ['player1', 'player2'] },
     effectType:    { type: String, enum: ['bleed', 'burn', 'linger', 'poison'] },
@@ -96,7 +113,7 @@ const battleSchema = new mongoose.Schema({
   }],
 
   winner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  loser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  loser:  { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   isDraw: { type: Boolean, default: false },
   endReason: String,
 
