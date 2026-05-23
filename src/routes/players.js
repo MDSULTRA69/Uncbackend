@@ -29,12 +29,11 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-console.log('DECK RECEIVED:', JSON.stringify(req.body.deck?.ninjutsuGenjutsu?.slice(0,1)));
-
 // Update own deck — must be before /:id
 router.put('/me/deck', auth, async (req, res) => {
   try {
     const { deck } = req.body;
+    console.log('DECK RECEIVED:', JSON.stringify(req.body.deck?.ninjutsuGenjutsu?.slice(0,1)));
     if (!deck) return res.status(400).json({ error: 'Deck data required' });
 
     const user = await User.findByIdAndUpdate(
