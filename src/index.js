@@ -17,14 +17,12 @@ const playerRoutes   = require('./routes/players');
 const battleRoutes   = require('./routes/battles');
 const gameDataRoutes = require('./routes/gameData');
 const adminRoutes    = require('./routes/admin');
-const deckCodeRoutes = require('./routes/deckCodes'); // ← NEW
 
 app.use('/api/auth',       authRoutes);
 app.use('/api/players',    playerRoutes);
 app.use('/api/battles',    battleRoutes);
 app.use('/api/game-data',  gameDataRoutes);
 app.use('/api/admin',      adminRoutes);
-app.use('/api/deck-codes', deckCodeRoutes); // ← NEW
 
 // Health check
 app.get('/api/health', (_, res) => res.json({ status: 'ok', version: '6.0' }));
