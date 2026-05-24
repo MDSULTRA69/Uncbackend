@@ -1,80 +1,16 @@
-// ============================================================
-// src/routes/battles.js  (UPDATED — private deck code support)
-// New behaviour:
-//   • POST /battles/create now accepts optional player1DeckCode
-//     and player2DeckCode. If provided, the encrypted deck is
-//     resolved server-side and stored as player1Deck / player2Deck.
-//     The code itself is stored so the AI moderator can verify
-//     submitted cards against the locked deck.
-//   • POST /battles/:id/action now checks submitted cardsUsed
-//     against the locked deck and injects a violation warning
-//     into the AI moderator response if cards don't match.
-// ============================================================
-
 const express = require('express');
 const Battle = require('../models/Battle');
 const User = require('../models/User');
-const DeckCode = require('../models/DeckCode');
 const { auth } = require('../middleware/auth');
 const { moderateTurn, getAIRuling, generateSpinResult } = require('../aiModerator');
-const deckCodesRouter = require('./deckCodes');
 
 const router = express.Router();
-
-// ── DECK CODE VALIDATION HELPER ──────────────────────────────
-
-/**
- * Given a UNC-XXXXXX code, fetch and decrypt the deck.
- * Returns { deck, deckCodeRecord } or throws.
- */
-async function resolveDeckCode(code, playerId) {
-  const record = await DeckCode.findOne({ code: code.toUpperCase().trim() });
-  if (!record) throw new Error(`Deck code ${code} not found or has expired.`);
-  if (record.player.toString() !== playerId.toString()) {
-    throw new Error(`Deck code ${code} does not belong to you.`);
-  }
-  const deck = deckCodesRouter.decryptDeck(record.encryptedDeck);
-  if (!deck) throw new Error(`Deck code ${code} could not be decrypted. Please re-lock your deck.`);
-  return { deck, deckCodeRecord: record };
-}
-
-/**
- * Build a flat array of all card names from a deck object.
- * Used for card-use validation.
- */
-function flatCardNames(deck) {
-  const names = new Set();
-  (deck.ninjutsuGenjutsu || []).forEach(c => c.name && names.add(c.name.toLowerCase().trim()));
-  (deck.skills || []).forEach(c => c.name && names.add(c.name.toLowerCase().trim()));
-  (deck.weaponBag || []).forEach(c => c.name && names.add(c.name.toLowerCase().trim()));
-  if (deck.kkgCard?.name) names.add(deck.kkgCard.name.toLowerCase().trim());
-  if (deck.tailedBeast?.name) names.add(deck.tailedBeast.name.toLowerCase().trim());
-  if (deck.summoningBeast?.name) names.add(deck.summoningBeast.name.toLowerCase().trim());
-  // BE moves are always valid — they're part of every deck
-  ['punch','kick','block','slash','throw','evade','genjutsu kai','substitution jutsu'].forEach(be => names.add(be));
-  return names;
-}
-
-/**
- * Check submitted cardsUsed against the player's locked deck.
- * Returns { valid: true } or { valid: false, violations: [...] }
- */
-function validateCardsAgainstDeck(cardsUsed = [], lockedDeck) {
-  if (!lockedDeck) return { valid: true }; // no locked deck in use — skip
-  const allowed = flatCardNames(lockedDeck);
-  const violations = cardsUsed
-    .filter(c => c.name && !allowed.has(c.name.toLowerCase().trim()))
-    .map(c => c.name);
-  return violations.length > 0
-    ? { valid: false, violations }
-    : { valid: true };
-}
 
 // ── CREATE BATTLE ─────────────────────────────────────────────
 
 router.post('/create', auth, async (req, res) => {
   try {
-    const { opponentId, battleType, player1DeckCode, player2DeckCode } = req.body;
+    const { opponentId, battleType } = req.body;
     if (!opponentId) return res.status(400).json({ error: 'Opponent required' });
 
     const opponent = await User.findById(opponentId);
@@ -82,45 +18,11 @@ router.post('/create', auth, async (req, res) => {
 
     const player = req.user;
 
-    // ── Resolve decks (from code or from saved deck) ──────────
-    let p1Deck = player.deck?.toObject ? player.deck.toObject() : player.deck;
-    let p2Deck = opponent.deck?.toObject ? opponent.deck.toObject() : opponent.deck;
-    let p1DeckCodeRecord = null;
-    let p2DeckCodeRecord = null;
-
-    if (player1DeckCode) {
-      try {
-        const resolved = await resolveDeckCode(player1DeckCode, player._id);
-        p1Deck = resolved.deck;
-        p1DeckCodeRecord = resolved.deckCodeRecord;
-      } catch (err) {
-        return res.status(400).json({ error: `P1 deck code error: ${err.message}` });
-      }
-    }
-
-    if (player2DeckCode) {
-      try {
-        const resolved = await resolveDeckCode(player2DeckCode, opponent._id);
-        p2Deck = resolved.deck;
-        p2DeckCodeRecord = resolved.deckCodeRecord;
-      } catch (err) {
-        return res.status(400).json({ error: `P2 deck code error: ${err.message}` });
-      }
-    }
-
-    // ── Build battle ──────────────────────────────────────────
     const battle = new Battle({
       player1: player._id,
       player2: opponent._id,
       player1Name: player.characterName,
       player2Name: opponent.characterName,
-      player1Deck: p1Deck,
-      player2Deck: p2Deck,
-
-      // Store codes so the action handler can verify card usage
-      player1DeckCode: p1DeckCodeRecord ? p1DeckCodeRecord.code : null,
-      player2DeckCode: p2DeckCodeRecord ? p2DeckCodeRecord.code : null,
-
       battleType: battleType || 'official',
       maxTurns: battleType === 'sparring' ? 5 : 10,
       whoseTurn: player._id,
@@ -128,35 +30,106 @@ router.post('/create', auth, async (req, res) => {
       village: player.village,
     });
 
-    // Opening message — mention if deck codes are in use
-    const codeNotice = (p1DeckCodeRecord || p2DeckCodeRecord)
-      ? `\n🔒 Private deck codes verified:\n${p1DeckCodeRecord ? `• ${player.characterName}: ${p1DeckCodeRecord.code}` : `• ${player.characterName}: no code (open deck)`}\n${p2DeckCodeRecord ? `• ${opponent.characterName}: ${p2DeckCodeRecord.code}` : `• ${opponent.characterName}: no code (open deck)`}\nDecks are locked server-side. AI MOD will flag any unlisted cards.`
-      : '';
-
     battle.chatLog.push({
       sender: player._id,
       senderName: 'AI-MOD',
-      message: `⚔️ BATTLE INITIATED!\n\n${player.characterName} vs ${opponent.characterName}\nType: ${(battleType || 'official').toUpperCase()} | Max Turns: ${battle.maxTurns}${codeNotice}\n\nA coin toss determines who goes first. ${player.characterName} (P1) calls it!`,
+      message: `⚔️ BATTLE INITIATED!\n\n${player.characterName} vs ${opponent.characterName}\nType: ${(battleType || 'official').toUpperCase()} | Max Turns: ${battle.maxTurns}\n\n🔒 Both players should submit their private deck before turn 1 starts. Use the DECK tab — your opponent will never see your cards.\n\nA coin toss determines who goes first. ${player.characterName} (P1) calls it!`,
       type: 'ai-mod',
     });
 
     await battle.save();
-
-    // Mark deck codes as in-use
-    if (p1DeckCodeRecord) {
-      await p1DeckCodeRecord.updateOne({ usedInBattle: battle._id });
-    }
-    if (p2DeckCodeRecord) {
-      await p2DeckCodeRecord.updateOne({ usedInBattle: battle._id });
-    }
-
     res.status(201).json({ battle });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET USER'S BATTLES ────────────────────────────────────────
+// ── SUBMIT PRIVATE DECK ───────────────────────────────────────
+
+router.post('/:id/submit-deck', auth, async (req, res) => {
+  try {
+    const battle = await Battle.findById(req.params.id);
+    if (!battle) return res.status(404).json({ error: 'Battle not found' });
+
+    const isPlayer1 = battle.player1.toString() === req.user._id.toString();
+    const isPlayer2 = battle.player2.toString() === req.user._id.toString();
+    if (!isPlayer1 && !isPlayer2) {
+      return res.status(403).json({ error: 'You are not in this battle' });
+    }
+
+    const { deck } = req.body;
+    if (!deck) return res.status(400).json({ error: 'Deck required' });
+
+    if (isPlayer1) {
+      battle.player1Deck = deck;
+      battle.player1DeckSubmitted = true;
+    } else {
+      battle.player2Deck = deck;
+      battle.player2DeckSubmitted = true;
+    }
+
+    // Log submission (visible to both — but not the contents)
+    const playerName = isPlayer1 ? battle.player1Name : battle.player2Name;
+    battle.chatLog.push({
+      sender: req.user._id,
+      senderName: 'AI-MOD',
+      message: `🔒 ${playerName} has submitted their private deck. Deck contents are hidden from opponent. AI MOD will validate card usage during the battle.`,
+      type: 'ai-mod',
+    });
+
+    await battle.save();
+    res.json({ message: 'Deck submitted privately. Your opponent cannot see your cards.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SUBMIT PRIVATE TRAPS ──────────────────────────────────────
+// Players can update traps at the start of every turn before acting.
+// Max 3 traps. Opponent never sees trap names — only the count.
+
+router.post('/:id/submit-traps', auth, async (req, res) => {
+  try {
+    const battle = await Battle.findById(req.params.id);
+    if (!battle) return res.status(404).json({ error: 'Battle not found' });
+
+    const isPlayer1 = battle.player1.toString() === req.user._id.toString();
+    const isPlayer2 = battle.player2.toString() === req.user._id.toString();
+    if (!isPlayer1 && !isPlayer2) {
+      return res.status(403).json({ error: 'You are not in this battle' });
+    }
+
+    const { traps } = req.body;
+    if (!Array.isArray(traps)) return res.status(400).json({ error: 'Traps must be an array' });
+    if (traps.length > 3) return res.status(400).json({ error: 'Max 3 traps allowed' });
+
+    const cleanTraps = traps.map(t => ({
+      name: String(t.name || ''),
+      class: String(t.class || 'D')
+    })).filter(t => t.name);
+
+    const playerName = isPlayer1 ? battle.player1Name : battle.player2Name;
+
+    if (isPlayer1) {
+      battle.player1Traps = cleanTraps;
+    } else {
+      battle.player2Traps = cleanTraps;
+    }
+
+    // Log trap submission — shows count only, not names
+    battle.chatLog.push({
+      sender: req.user._id,
+      senderName: 'AI-MOD',
+      message: `🪤 ${playerName} has updated their traps (${cleanTraps.length} trap${cleanTraps.length !== 1 ? 's' : ''} set). Contents hidden from opponent.`,
+      type: 'ai-mod',
+    });
+
+    await battle.save();
+    res.json({ message: `${cleanTraps.length} trap(s) submitted privately.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get('/my-battles', auth, async (req, res) => {
   try {
@@ -195,35 +168,32 @@ router.get('/active', auth, async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
   try {
     const battle = await Battle.findById(req.params.id)
-      .populate('player1', 'characterName clan village rank deck compatibleMoves elements')
-      .populate('player2', 'characterName clan village rank deck compatibleMoves elements')
+      .populate('player1', 'characterName clan village rank compatibleMoves elements')
+      .populate('player2', 'characterName clan village rank compatibleMoves elements')
       .populate('winner', 'characterName')
       .populate('chatLog.sender', 'characterName');
 
     if (!battle) return res.status(404).json({ error: 'Battle not found' });
 
-    // Redact the opponent's deck from the response so neither player
-    // can read each other's deck contents via the API.
-    // Each player only receives their OWN deck back.
     const isPlayer1 = battle.player1?._id?.toString() === req.user._id.toString();
     const isPlayer2 = battle.player2?._id?.toString() === req.user._id.toString();
 
     const battleObj = battle.toObject();
+
+    // Each player only sees their OWN deck — opponent deck is always redacted
     if (isPlayer1) {
-      // Redact P2 deck
-      battleObj.player2Deck = battle.player2DeckCode
-        ? { _redacted: true, code: battle.player2DeckCode }
-        : battleObj.player2Deck;
+      battleObj.player2Deck = null;
+      // Hide opponent trap names — show count only
+      battleObj.player2Traps = battle.player2Traps?.map(() => ({ name: '🔒 Hidden', class: '?' })) || [];
     } else if (isPlayer2) {
-      // Redact P1 deck
-      battleObj.player1Deck = battle.player1DeckCode
-        ? { _redacted: true, code: battle.player1DeckCode }
-        : battleObj.player1Deck;
-    }
-    // Spectators see neither deck
-    if (!isPlayer1 && !isPlayer2) {
-      if (battle.player1DeckCode) battleObj.player1Deck = { _redacted: true, code: battle.player1DeckCode };
-      if (battle.player2DeckCode) battleObj.player2Deck = { _redacted: true, code: battle.player2DeckCode };
+      battleObj.player1Deck = null;
+      battleObj.player1Traps = battle.player1Traps?.map(() => ({ name: '🔒 Hidden', class: '?' })) || [];
+    } else {
+      // Spectator — sees neither deck nor traps
+      battleObj.player1Deck = null;
+      battleObj.player2Deck = null;
+      battleObj.player1Traps = battle.player1Traps?.map(() => ({ name: '🔒 Hidden', class: '?' })) || [];
+      battleObj.player2Traps = battle.player2Traps?.map(() => ({ name: '🔒 Hidden', class: '?' })) || [];
     }
 
     res.json({ battle: battleObj });
@@ -256,24 +226,28 @@ router.post('/:id/action', auth, async (req, res) => {
     const { action, cardsUsed, phase } = req.body;
     if (!action) return res.status(400).json({ error: 'Action required' });
 
-    // ── DECK CODE CARD VALIDATION ─────────────────────────────
-    const actingCode = isPlayer1 ? battle.player1DeckCode : battle.player2DeckCode;
+    // ── VALIDATE CARDS AGAINST PRIVATE DECK ──────────────────
     let deckViolationWarning = '';
+    const deckSubmitted = isPlayer1 ? battle.player1DeckSubmitted : battle.player2DeckSubmitted;
 
-    if (actingCode && cardsUsed?.length > 0) {
-      const check = validateCardsAgainstDeck(cardsUsed, actingDeck);
-      if (!check.valid) {
-        deckViolationWarning = `\n\n⚠️ **DECK VIOLATION DETECTED** ⚠️\n${actingPlayer.characterName} submitted card(s) NOT in their locked deck (${actingCode}):\n${check.violations.map(v => `• ${v}`).join('\n')}\n\nThese cards are INVALID this turn. MOD will disregard them in resolution.`;
+    if (deckSubmitted && actingDeck && cardsUsed?.length > 0) {
+      const allowedNames = new Set();
+      (actingDeck.ninjutsuGenjutsu || []).forEach(c => c.name && allowedNames.add(c.name.toLowerCase().trim()));
+      (actingDeck.skills || []).forEach(c => c.name && allowedNames.add(c.name.toLowerCase().trim()));
+      (actingDeck.weaponBag || []).forEach(c => c.name && allowedNames.add(c.name.toLowerCase().trim()));
+      if (actingDeck.kkgCard?.name) allowedNames.add(actingDeck.kkgCard.name.toLowerCase().trim());
+      if (actingDeck.tailedBeast?.name) allowedNames.add(actingDeck.tailedBeast.name.toLowerCase().trim());
+      if (actingDeck.summoningBeast?.name) allowedNames.add(actingDeck.summoningBeast.name.toLowerCase().trim());
+      ['punch','kick','block','slash','throw','evade','genjutsu kai','substitution jutsu'].forEach(be => allowedNames.add(be));
+
+      const violations = cardsUsed
+        .filter(c => c.name && !allowedNames.has(c.name.toLowerCase().trim()))
+        .map(c => c.name);
+
+      if (violations.length > 0) {
+        deckViolationWarning = `\n\n⚠️ DECK VIOLATION — ${actingPlayer.characterName} used card(s) NOT in their submitted deck:\n${violations.map(v => `• ${v}`).join('\n')}\nThese cards are INVALID this turn and disregarded by MOD.`;
       }
     }
-
-    // Filter out violated cards before passing to AI moderator
-    const validCardsUsed = actingCode
-      ? (cardsUsed || []).filter(c => {
-          const allowed = flatCardNames(actingDeck);
-          return !c.name || allowed.has(c.name.toLowerCase().trim());
-        })
-      : (cardsUsed || []);
 
     // Add player message to chat
     battle.chatLog.push({
@@ -283,23 +257,18 @@ router.post('/:id/action', auth, async (req, res) => {
       type: 'player',
     });
 
-    // Build turn entry
     const turnEntry = {
       turnNumber: battle.currentTurn,
       phase: phase || battle.phase,
       playerId: req.user._id,
       playerName: actingPlayer.characterName,
       action,
-      cardsUsed: validCardsUsed,
+      cardsUsed: cardsUsed || [],
     };
 
-    // Get AI moderation (with violation warning appended if needed)
     const aiResponse = await moderateTurn(battle, action, actingPlayer, opposingPlayer);
-    const fullAiResponse = deckViolationWarning
-      ? aiResponse + deckViolationWarning
-      : aiResponse;
+    const fullAiResponse = deckViolationWarning ? aiResponse + deckViolationWarning : aiResponse;
 
-    // Parse HP changes from AI response
     const p1HPMatch = fullAiResponse.match(/P1[:\s]+(\d+)/i);
     const p2HPMatch = fullAiResponse.match(/P2[:\s]+(\d+)/i);
     if (p1HPMatch) battle.player1HP = Math.max(0, parseInt(p1HPMatch[1]));
@@ -310,7 +279,6 @@ router.post('/:id/action', auth, async (req, res) => {
     turnEntry.aiModNote = fullAiResponse;
     battle.turns.push(turnEntry);
 
-    // Add AI mod response to chat
     battle.chatLog.push({
       sender: req.user._id,
       senderName: 'AI-MOD',
@@ -348,21 +316,12 @@ router.post('/:id/action', auth, async (req, res) => {
         battle.endReason = 'Turn limit reached';
       }
 
-      // Update player stats
       if (battle.winner) {
-        await User.findByIdAndUpdate(battle.winner, {
-          $inc: { 'stats.wins': 1, 'stats.points': 3, 'stats.modCoins': 2 },
-        });
-        await User.findByIdAndUpdate(battle.loser, {
-          $inc: { 'stats.losses': 1, 'stats.modCoins': 2 },
-        });
+        await User.findByIdAndUpdate(battle.winner, { $inc: { 'stats.wins': 1, 'stats.points': 3, 'stats.modCoins': 2 } });
+        await User.findByIdAndUpdate(battle.loser, { $inc: { 'stats.losses': 1, 'stats.modCoins': 2 } });
       } else if (battle.isDraw) {
-        await User.findByIdAndUpdate(battle.player1._id, {
-          $inc: { 'stats.draws': 1, 'stats.points': 1, 'stats.modCoins': 2 },
-        });
-        await User.findByIdAndUpdate(battle.player2._id, {
-          $inc: { 'stats.draws': 1, 'stats.points': 1, 'stats.modCoins': 2 },
-        });
+        await User.findByIdAndUpdate(battle.player1._id, { $inc: { 'stats.draws': 1, 'stats.points': 1, 'stats.modCoins': 2 } });
+        await User.findByIdAndUpdate(battle.player2._id, { $inc: { 'stats.draws': 1, 'stats.points': 1, 'stats.modCoins': 2 } });
       }
 
       battle.chatLog.push({
@@ -371,12 +330,7 @@ router.post('/:id/action', auth, async (req, res) => {
         message: `🏁 BATTLE CONCLUDED!\nResult: ${battle.isDraw ? 'DRAW!' : `${battle.winner.toString() === battle.player1._id.toString() ? battle.player1Name : battle.player2Name} WINS!`}\nReason: ${battle.endReason}`,
         type: 'ai-mod',
       });
-
-      // Clean up deck code records now that the battle is done.
-      // Fire-and-forget — don't block the response on this.
-      DeckCode.cleanupForBattle(battle._id).catch(() => {});
     } else {
-      // Advance turn
       if (battle.phase === 'attack') {
         battle.phase = 'response';
       } else {
@@ -401,7 +355,6 @@ router.post('/:id/ask-mod', auth, async (req, res) => {
   try {
     const battle = await Battle.findById(req.params.id);
     if (!battle) return res.status(404).json({ error: 'Battle not found' });
-
     const { question } = req.body;
     const answer = await getAIRuling(question, battle);
     res.json({ answer });
@@ -416,7 +369,6 @@ router.post('/:id/spin', auth, async (req, res) => {
   try {
     const battle = await Battle.findById(req.params.id);
     if (!battle) return res.status(404).json({ error: 'Battle not found' });
-
     const { spinType } = req.body;
     const result = await generateSpinResult(spinType, req.user);
     res.json({ result });
@@ -443,10 +395,6 @@ router.post('/:id/forfeit', auth, async (req, res) => {
     await User.findByIdAndUpdate(battle.loser,  { $inc: { 'stats.losses': 1, 'stats.points': -3 } });
 
     await battle.save();
-
-    // Clean up deck code records for this completed battle.
-    DeckCode.cleanupForBattle(battle._id).catch(() => {});
-
     res.json({ battle, message: 'Battle forfeited' });
   } catch (err) {
     res.status(500).json({ error: err.message });
