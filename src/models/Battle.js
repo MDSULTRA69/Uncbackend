@@ -1,10 +1,3 @@
-// ============================================================
-// src/models/Battle.js  (UPDATED — private deck code fields added)
-// New fields: player1DeckCode, player2DeckCode
-// These store the UNC-XXXXXX code string so the action handler
-// can verify card submissions against the locked deck.
-// ============================================================
-
 const mongoose = require('mongoose');
 
 const turnSchema = new mongoose.Schema({
@@ -27,18 +20,17 @@ const battleSchema = new mongoose.Schema({
   player2Name: String,
   player1HP: { type: Number, default: 100 },
   player2HP: { type: Number, default: 100 },
+
+  // Private decks — only visible to each respective player server-side
   player1Deck: Object,
   player2Deck: Object,
+  player1DeckSubmitted: { type: Boolean, default: false },
+  player2DeckSubmitted: { type: Boolean, default: false },
 
-  // ── DECK CODE FIELDS (NEW) ─────────────────────────────────
-  // Stores the UNC-XXXXXX code string if a player locked their deck.
-  // null = player is using their open saved deck (no code).
-  // The encrypted deck is stored in DeckCode collection and resolved
-  // at battle creation — player1Deck/player2Deck always holds the
-  // actual deck contents for AI moderator use, but these code strings
-  // allow the action handler to flag unlisted card usage.
-  player1DeckCode: { type: String, default: null },
-  player2DeckCode: { type: String, default: null },
+  // Private traps — submitted each turn, hidden from opponent until triggered
+  // Max 3 traps. Updated at start of every turn before acting.
+  player1Traps: [{ name: String, class: String }],
+  player2Traps: [{ name: String, class: String }],
 
   status: {
     type: String,
@@ -65,7 +57,6 @@ const battleSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now }
   }],
 
-  // Active states
   activeTraps: [{
     playerId: mongoose.Schema.Types.ObjectId,
     trapName: String,
@@ -78,14 +69,12 @@ const battleSchema = new mongoose.Schema({
   }],
   activeMomentumDice: { value: Number, expiresOnTurn: Number },
 
-  // FA chain tracking
   faChain: [{
     player: String,
     action: String,
     faLevel: Number
   }],
 
-  // Live board state per player
   boardState: {
     player1: {
       activated:  [String],
@@ -103,7 +92,6 @@ const battleSchema = new mongoose.Schema({
     }
   },
 
-  // After-effects queue
   afterEffects: [{
     targetPlayer:  { type: String, enum: ['player1', 'player2'] },
     effectType:    { type: String, enum: ['bleed', 'burn', 'linger', 'poison'] },
