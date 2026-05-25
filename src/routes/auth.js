@@ -5,7 +5,10 @@ const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
-const generateToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+const generateToken = (id) => {
+  if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET environment variable is not set');
+  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+};
 
 // Register
 router.post('/register', async (req, res) => {
@@ -88,8 +91,8 @@ router.post('/login', async (req, res) => {
     const match = await user.comparePassword(password);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
-    user.lastSeen = new Date();
-    await user.save();
+    // Use updateOne to avoid triggering the bcrypt pre-save hook on lastSeen update
+    await User.updateOne({ _id: user._id }, { $set: { lastSeen: new Date() } });
 
     const token = generateToken(user._id);
     res.json({ token, user: user.toProfileJSON() });
