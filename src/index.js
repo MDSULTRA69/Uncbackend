@@ -8,7 +8,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*', credentials: false }));
 app.use(express.json());
 
 // ── ROUTES ───────────────────────────────────────────────────
