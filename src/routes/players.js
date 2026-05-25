@@ -35,12 +35,10 @@ router.put('/me/deck', auth, async (req, res) => {
     const { deck } = req.body;
     if (!deck) return res.status(400).json({ error: 'Deck data required' });
 
-    await User.collection.updateOne(
-  { _id: user._id },
-  { $set: { deck } }
-);
-const user2 = await User.findById(req.user._id);
-res.json({ deck: user2.deck, message: 'Deck updated!' });
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: { deck } },
+      { new: true, runValidators: false }
     );
     res.json({ deck: user.deck, message: 'Deck updated!' });
   } catch (err) {
