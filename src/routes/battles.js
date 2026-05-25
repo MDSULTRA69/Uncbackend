@@ -273,17 +273,26 @@ router.post('/:id/action', auth, async (req, res) => {
 
     // ── COIN TOSS HANDLING ────────────────────────────────────
     const actionLower = action.toLowerCase().trim();
-    const isCoinToss = actionLower === 'heads' || actionLower === 'tails' || 
-                       actionLower.includes('i call heads') || actionLower.includes('i call tails');
-    
-    if (isCoinToss && battle.currentTurn === 1 && battle.turns.length === 0) {
+    const isCoinTossInput = actionLower === 'heads' || actionLower === 'tails' ||
+                            actionLower.includes('i call heads') || actionLower.includes('i call tails');
+
+    // Guard: if coin toss not yet done, ONLY accept heads/tails — reject everything else
+    if (!battle.coinTossCompleted) {
+      if (!isCoinTossInput) {
+        return res.status(400).json({
+          error: 'Waiting for coin toss. Please type HEADS or TAILS to determine who goes first.'
+        });
+      }
+
       const result = Math.random() < 0.5 ? 'HEADS' : 'TAILS';
       const call = actionLower.includes('tail') ? 'TAILS' : 'HEADS';
       const p1Wins = call === result;
-      const firstPlayer = p1Wins ? battle.player1Name : battle.player2Name;
-      const firstPlayerId = p1Wins ? battle.player1._id : battle.player2._id;
+      const firstPlayer    = p1Wins ? battle.player1Name : battle.player2Name;
+      const firstPlayerId  = p1Wins ? battle.player1._id : battle.player2._id;
 
-      battle.whoseTurn = firstPlayerId;
+      battle.whoseTurn         = firstPlayerId;
+      battle.coinTossCompleted = true;
+      battle.phase             = 'attack';
 
       battle.chatLog.push({ sender: req.user._id, senderName: actingPlayer.characterName, message: action, type: 'player' });
 

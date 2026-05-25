@@ -1203,6 +1203,14 @@ Turn ${battle.currentTurn || 1} | Phase: ${(battle.phase || 'attack').toUpperCas
 
 // ── MAIN MODERATION FUNCTION ──────────────────────────────────
 const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, actingPlayerRole = 'player1') => {
+  // ── SAFETY GUARD: never process a coin-toss reply as a battle action ──
+  const _actionLower = playerAction.toLowerCase().trim();
+  if (!battle.coinTossCompleted && (
+    _actionLower === 'heads' || _actionLower === 'tails' ||
+    _actionLower.includes('i call heads') || _actionLower.includes('i call tails')
+  )) {
+    return `⚠️ AI-MOD: Coin toss is still pending. This reply will not be counted as a battle move. Please wait for the coin toss to resolve.`;
+  }
   const turn = battle.currentTurn || 1;
   const phase = battle.phase || 'attack';
   const p1HP = battle.player1HP ?? 100;
@@ -1412,6 +1420,15 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
     battle.player1Name || 'P1',
     battle.player2Name || 'P2'
   ));
+
+  // ── NEXT ACTION PROMPT ──────────────────────────────────────
+  if (phase === 'attack' && attackMoves.length > 0) {
+    lines.push(``);
+    lines.push(`[NEXT] ⏳ ${opposingPlayer.characterName} — type your DEFENSE or COUNTER in the battle input below.`);
+  } else if (phase === 'response') {
+    lines.push(``);
+    lines.push(`[NEXT] ⏳ ${actingPlayer.characterName} — it is now your ATTACK turn. Type your move below.`);
+  }
 
   return lines.join('\n');
 };

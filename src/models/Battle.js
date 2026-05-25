@@ -48,6 +48,7 @@ const battleSchema = new mongoose.Schema({
   maxTurns: { type: Number, default: 10 },
   whoseTurn: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   phase: { type: String, default: 'attack' },
+  coinTossCompleted: { type: Boolean, default: false },
 
   turns: [turnSchema],
   chatLog: [{
