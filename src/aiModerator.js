@@ -1197,17 +1197,17 @@ function buildBoardTemplate(battle, p1Name, p2Name) {
 *Summonings:* ${fmtList(p2State.summonings)}
 *Traps:* ${p2TrapCount > 0 ? `🔒 Hidden (${p2TrapCount} set)` : 'None'}
 
-Turn ${battle.currentTurn} | Phase: ${(battle.phase || 'attack').toUpperCase()}
+Turn ${battle.currentTurn || 1} | Phase: ${(battle.phase || 'attack').toUpperCase()}
 `.trim();
 }
 
 // ── MAIN MODERATION FUNCTION ──────────────────────────────────
-const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer) => {
+const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, actingPlayerRole = 'player1') => {
   const turn = battle.currentTurn || 1;
   const phase = battle.phase || 'attack';
   const p1HP = battle.player1HP ?? 100;
   const p2HP = battle.player2HP ?? 100;
-  const isP1Acting = actingPlayer._id.toString() === battle.player1.toString();
+  const isP1Acting = actingPlayerRole === 'player1';
   const actingHP   = isP1Acting ? p1HP : p2HP;
   const opposingHP = isP1Acting ? p2HP : p1HP;
   const actingTraps   = isP1Acting ? (battle.player1Traps || []) : (battle.player2Traps || []);
@@ -1532,4 +1532,20 @@ const generateSpinResult = async (spinType, player) => {
   return `🪙 COIN TOSS — ${coinToss()}!`;
 };
 
-module.exports = { moderateTurn, getAIRuling, generateSpinResult, buildBoardTemplate, parseSubmission, resolveFAChain, validateTrapAs2FA, resolve2FA };
+// ── OPENING ROLLS ─────────────────────────────────────────────
+// Generated once at match start. Determines key values for the whole match.
+const TERRAINS = ['Fire', 'Water', 'Wind', 'Earth', 'Lightning', 'Vacuum', 'Neutral'];
+
+const generateOpeningRolls = () => {
+  return {
+    AA: rollDice(6),           // Attack Ability roll (1-6)
+    TB: rollDice(6),           // Tailed Beast roll
+    SSS_prime: rollDice(6),    // SSS Prime roll
+    SB: rollDice(6),           // Sage Boost roll
+    armourAA: rollDice(6),     // Armour AA roll
+    zClass: rollDice(6),       // Z Class roll
+    terrain: TERRAINS[Math.floor(Math.random() * TERRAINS.length)], // Random terrain
+  };
+};
+
+module.exports = { moderateTurn, getAIRuling, generateSpinResult, generateOpeningRolls, buildBoardTemplate, parseSubmission, resolveFAChain, validateTrapAs2FA, resolve2FA };

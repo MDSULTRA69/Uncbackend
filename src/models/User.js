@@ -2,13 +2,13 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const deckSchema = new mongoose.Schema({
-  ninjutsuGenjutsu: { type: [], default: [] },
-  skills: { type: [], default: [] },
-  weaponBag: { type: [], default: [] },
-  kkgCard: { type: mongoose.Schema.Types.Mixed, default: {} },
-  basicEssentials: { type: mongoose.Schema.Types.Mixed, default: {} },
-  tailedBeast: { type: mongoose.Schema.Types.Mixed, default: {} },
-  summoningBeast: { type: mongoose.Schema.Types.Mixed, default: {} }
+  ninjutsuGenjutsu: [{ name: String, class: String, rank: Number, type: String }],
+  skills: [{ name: String, type: String, description: String }],
+  weaponBag: [{ name: String, type: String, class: String }],
+  kkgCard: { name: String, description: String, element: String },
+  basicEssentials: { class: String, rank: Number },
+  tailedBeast: { name: String, class: String },
+  summoningBeast: { name: String, element: String }
 });
 
 const statsSchema = new mongoose.Schema({

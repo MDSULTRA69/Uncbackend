@@ -44,6 +44,7 @@ const battleSchema = new mongoose.Schema({
   },
 
   currentTurn: { type: Number, default: 1 },
+  openingRolls: { type: mongoose.Schema.Types.Mixed, default: null },
   maxTurns: { type: Number, default: 10 },
   whoseTurn: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   phase: { type: String, default: 'attack' },
