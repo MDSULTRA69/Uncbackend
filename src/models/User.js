@@ -2,13 +2,13 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const deckSchema = new mongoose.Schema({
-  ninjutsuGenjutsu: { type: [], default: [] },
-  skills: { type: [], default: [] },
-  weaponBag: { type: [], default: [] },
-  kkgCard: { type: mongoose.Schema.Types.Mixed, default: {} },
-  basicEssentials: { type: mongoose.Schema.Types.Mixed, default: {} },
-  tailedBeast: { type: mongoose.Schema.Types.Mixed, default: {} },
-  summoningBeast: { type: mongoose.Schema.Types.Mixed, default: {} }
+  ninjutsuGenjutsu: [{ name: String, class: String, rank: Number, type: String }],
+  skills: [{ name: String, type: String, description: String }],
+  weaponBag: [{ name: String, type: String, class: String }],
+  kkgCard: { name: String, description: String, element: String },
+  basicEssentials: { class: String, rank: Number },
+  tailedBeast: { name: String, class: String },
+  summoningBeast: { name: String, element: String }
 });
 
 const statsSchema = new mongoose.Schema({
@@ -64,9 +64,7 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 userSchema.pre('save', async function(next) {
-  // Only hash if password was explicitly changed AND is not already a bcrypt hash
   if (!this.isModified('password')) return next();
-  if (this.password && this.password.startsWith('$2')) return next(); // already hashed
   this.password = await bcrypt.hash(this.password, 12);
   next();
 });
