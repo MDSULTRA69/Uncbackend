@@ -1201,8 +1201,115 @@ Turn ${battle.currentTurn || 1} | Phase: ${(battle.phase || 'attack').toUpperCas
 `.trim();
 }
 
+
+// ── DECK VALIDATOR (used inside moderator to inline-flag violations) ──────
+function validateMovesAgainstDeck(playerAction, actingPlayerDeck, actingPlayerName) {
+  if (!actingPlayerDeck) return null;
+
+  const allowedNames = new Set();
+  (actingPlayerDeck.ninjutsuGenjutsu || []).forEach(c => c.name && allowedNames.add(c.name.toLowerCase().trim()));
+  (actingPlayerDeck.skills || []).forEach(c => c.name && allowedNames.add(c.name.toLowerCase().trim()));
+  (actingPlayerDeck.weaponBag || []).forEach(c => c.name && allowedNames.add(c.name.toLowerCase().trim()));
+  if (actingPlayerDeck.kkgCard?.name) allowedNames.add(actingPlayerDeck.kkgCard.name.toLowerCase().trim());
+  if (actingPlayerDeck.tailedBeast?.name) allowedNames.add(actingPlayerDeck.tailedBeast.name.toLowerCase().trim());
+  if (actingPlayerDeck.summoningBeast?.name) allowedNames.add(actingPlayerDeck.summoningBeast.name.toLowerCase().trim());
+
+  // Always-allowed: bonus skills and basic essentials
+  ['negate','shield','bulletproof','speed','active','time-time','heightened sense','old flame',
+   'nature','erase','crystal','health','king of luck','punch','kick','block','slash','throw',
+   'evade','dodge','genjutsu kai','substitution jutsu','clone sub','skip','counter',
+   '2fa','3fa','no 2fa','set trap','activate','heads','tails'].forEach(b => allowedNames.add(b));
+
+  const lines = playerAction.split(/[\n,]+/).map(l => l.trim().toLowerCase()).filter(Boolean);
+  const violations = [];
+
+  for (const line of lines) {
+    // Strip prefixes to isolate the move name
+    let stripped = line
+      .replace(/^activate\s+/i, '')
+      .replace(/^summon\s+/i, '')
+      .replace(/^instant\s+/i, '')
+      .replace(/^all\s+.*?clones?\s*:\s*/i, '')
+      .replace(/^create\s+\d+\s+.*?clones?\s*/i, '')
+      .replace(/^\d+fa\s+/i, '')
+      .replace(/\s+(SSS|SS|S|A|B|C|D|E|Z)\d*$/i, '')
+      .trim();
+
+    if (!stripped || stripped.length < 3) continue;
+
+    // Check if it matches any allowed card
+    const isAllowed = [...allowedNames].some(allowed => {
+      return stripped === allowed || stripped.startsWith(allowed) || allowed.startsWith(stripped);
+    });
+
+    // Only flag lines that look like specific move names
+    const looksLikeMove = /(jutsu|mode|rasengan|chidori|tbb|hvt|chakra|bijuu|sage|manda|zephyr|arm|bomb|kirin|dragon|shadow|cloning|rashumon|shelter|prison|vortex|blade|burst|typhoon)/.test(stripped);
+
+    if (looksLikeMove && !isAllowed) {
+      violations.push(stripped);
+    }
+  }
+
+  if (violations.length > 0) {
+    return `⚠️ DECK VIOLATION — ${actingPlayerName} used move(s) NOT in their deck:\n${violations.map(v => `• ${v} ❌ INVALID`).join('\n')}\nThese moves do NOT count this turn.`;
+  }
+  return null;
+}
+
+// ── BATTLE FLOW UNDERSTANDING ────────────────────────────────
+// How a UNC battle works (from real battle log analysis):
+//
+// TURN STRUCTURE:
+// Each turn has an ATTACKER and a DEFENDER (who responds).
+// On odd-numbered turns (1,3,5,7,9): Player who won coin toss attacks; other player sets traps then responds.
+// On even-numbered turns (2,4,6,8,10): The OTHER player attacks; original attacker responds.
+// BUT this can change if "skip" is played or Benitez-style delays happen.
+//
+// PHASE FLOW within a turn:
+// 1. TRAP PHASE — both players secretly update traps (submitted via /submit-traps)
+// 2. ATTACK PHASE — attacker submits their full move (activate X, summon Y, use Z SSS5, instant Z1, etc.)
+// 3. SUMMARY — mod reads out the play components and asks opponent to respond
+// 4. RESPONSE PHASE — defender responds: counter / evade / trap: X / 2FA / no 2fa / take the hit
+// 5. 2FA CHAIN — attacker may 2FA the defense. Defender may 2FA back. 3FA = King of Luck (overturns all).
+// 6. DAMAGE / RESOLUTION — mod calculates damage, updates HP and board state
+// 7. NEXT TURN
+//
+// KEY RULES:
+// - A player CANNOT respond to their own attack (the /action route now enforces this)
+// - "counter" in the response means a counter-attack (not the same as 2FA)
+// - "activate X" in an attack means turning on a power-up or mode for the turn
+// - "summon X" brings a beast/creature onto the field with its own HP
+// - "Z5", "SSS2", "A3" etc. = class + rank of the move
+// - "instant Z5" = move is instant (cannot be evaded/countered by speed)
+// - "HVT" = High-Value Target (a beast attack that creates a follow-on damage mini-game)
+// - "skip" = player passes their turn (still sets traps)
+// - "clone sub" = substitution using a clone (reduces damage by putting a clone in the way)
+// - "trap: X" or "activate trap" = triggering a pre-set trap as a 2FA defense
+// - Traps must be IN the player's submitted trap list to be valid
+// - "2fa" / "no 2fa" = whether the player uses their second chance after opponent's 1FA
+// - "3fa King of Luck" = ultimate trump — overturns any previous bad outcome, cannot be countered
+// - Sage Mode / Bijuu Mode = power activation with limited charges (2-4 per match)
+// - "SB wheel", "TB wheel" etc. refer to spin results from the opening meter card rolls
+//
+// DECK VALIDATION:
+// Every named jutsu, skill, summoning, or activation MUST be in the player's submitted deck.
+// Bonus skills (negate, shield, bulletproof, speed, KoL, etc.) are universal.
+// Basic Essentials (punch, kick, block, slash, throw, evade, genjutsu kai) are always valid.
+// If a player uses a card not in their deck: the move is INVALID that turn.
+//
+// COOLDOWNS (from real battle):
+// - Sage Mode: available after 2 charges spent, goes on cooldown (usually turn+4)
+// - teleport: turn+4 cooldown after use
+// - Negate, bulletproof, shield, etc.: once per match (struck-through after use)
+// - KoL (King of Luck): turn+4 cooldown (seen as "KoL(turn 5)" in cooldown list)
+// - HVT: turn+4 cooldown after use
+//
+// BOARD STATE FORMAT (matches the WhatsApp format):
+// NIN_A/NIN_B, HP, Activated, Effects, Clones, Summonings, Traps (count/3)
+// HT = Hit Taken (damage accumulated this turn before it's subtracted from HP display)
+
 // ── MAIN MODERATION FUNCTION ──────────────────────────────────
-const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, actingPlayerRole = 'player1') => {
+const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, actingPlayerRole = 'player1', actingPlayerDeck = null) => {
   const turn = battle.currentTurn || 1;
   const phase = battle.phase || 'attack';
   const p1HP = battle.player1HP ?? 100;
@@ -1213,6 +1320,20 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
   const actingTraps   = isP1Acting ? (battle.player1Traps || []) : (battle.player2Traps || []);
   const opposingTraps = isP1Acting ? (battle.player2Traps || []) : (battle.player1Traps || []);
 
+  // ── SKIP HANDLING ──────────────────────────────────────────
+  // "skip" = player passes their attack turn (no action taken, still sets traps)
+  if (/^\s*skip\s*$/i.test(playerAction.trim())) {
+    return [
+      `⏭️ ${actingPlayer.characterName} SKIPS their turn.`,
+      ``,
+      `No attack this turn. ${opposingPlayer.characterName} may set traps.`,
+      `Turn ${turn} | Next: ${opposingPlayer.characterName} to attack.`,
+      ``,
+      `[HP UPDATE] P1: ${p1HP} | P2: ${p2HP}`,
+      buildBoardTemplate(battle, battle.player1Name || 'P1', battle.player2Name || 'P2')
+    ].join('\n');
+  }
+
   const lastTurn  = battle.turns?.slice(-1)[0] || {};
   const cardsUsed = lastTurn.cardsUsed || [];
   const subMoves  = parseSubmission(playerAction, cardsUsed);
@@ -1220,6 +1341,9 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
   let newP1HP = p1HP;
   let newP2HP = p2HP;
   const lines = [];
+
+  // ── INLINE DECK VIOLATION CHECK ────────────────────────────
+  const deckViolation = validateMovesAgainstDeck(playerAction, actingPlayerDeck, actingPlayer.characterName);
 
   // ── TRAP 2FA DETECTION ────────────────────────────────────
   const trapTriggerMatch = /(?:trap|activate trap|i use my trap|triggering trap)[:\s]+(.+)/i.exec(playerAction);
@@ -1471,6 +1595,11 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
     battle.player2Name || 'P2'
   ));
 
+  if (deckViolation) {
+    lines.push(``);
+    lines.push(deckViolation);
+  }
+
   return lines.join('\n');
 };
 
@@ -1606,4 +1735,4 @@ const generateOpeningRolls = () => {
   };
 };
 
-module.exports = { moderateTurn, getAIRuling, generateSpinResult, generateOpeningRolls, buildBoardTemplate, parseSubmission, resolveFAChain, validateTrapAs2FA, resolve2FA };
+module.exports = { moderateTurn, getAIRuling, generateSpinResult, generateOpeningRolls, buildBoardTemplate, parseSubmission, resolveFAChain, validateTrapAs2FA, resolve2FA, validateMovesAgainstDeck };
