@@ -1203,14 +1203,6 @@ Turn ${battle.currentTurn || 1} | Phase: ${(battle.phase || 'attack').toUpperCas
 
 // ── MAIN MODERATION FUNCTION ──────────────────────────────────
 const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, actingPlayerRole = 'player1') => {
-  // ── SAFETY GUARD: never process a coin-toss reply as a battle action ──
-  const _actionLower = playerAction.toLowerCase().trim();
-  if (!battle.coinTossCompleted && (
-    _actionLower === 'heads' || _actionLower === 'tails' ||
-    _actionLower.includes('i call heads') || _actionLower.includes('i call tails')
-  )) {
-    return `⚠️ AI-MOD: Coin toss is still pending. This reply will not be counted as a battle move. Please wait for the coin toss to resolve.`;
-  }
   const turn = battle.currentTurn || 1;
   const phase = battle.phase || 'attack';
   const p1HP = battle.player1HP ?? 100;
@@ -1335,12 +1327,20 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
 
   lines.push(``);
 
+  // ── TRAP TURN RULES ───────────────────────────────────────
+  // P1 sets traps on turns: 1,2,3,5,7,9
+  // P2 sets traps on turns: 1,2,4,6,8,10
+  const currentTurnNum = battle.currentTurn || 1;
+  const p1TrapTurns = [1, 2, 3, 5, 7, 9];
+  const p2TrapTurns = [1, 2, 4, 6, 8, 10];
+
   // ── RESPONSE PHASE ────────────────────────────────────────
   if (phase === 'response') {
-    const lastAttackEntry = battle.turns?.slice(-1)[0];
+    const lastAttackEntry = battle.turns?.slice(-2)[0];
     const lastAttackText  = lastAttackEntry?.action || '';
     const lastAttackCls   = extractClass(lastAttackText) || 'D';
     const lastAttackHit   = HIT_VALUES[lastAttackCls] || 20;
+    const lastAttackMeta  = lookupMove(lastAttackText);
 
     if (attackMoves.length === 0) {
       // Taking the hit
@@ -1349,47 +1349,97 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
       totalDmgDealt = lastAttackHit;
       lines.push(`💥 HIT CONFIRMED — ${actingPlayer.characterName} takes ${lastAttackHit} damage!`);
     } else {
-      // Counter-attack — speed game
-      const nums = randomNumbers(3, 1, 10);
-      lines.push(`⚡ COUNTER-ATTACK — ${actingPlayer.characterName} fires back!`);
-      lines.push(`Both moves CLASH — SPEED GAME: [${nums.join(', ')}]`);
-      lines.push(`${actingPlayer.characterName} picks first. Highest wins. Winner's move deals full damage.`);
+      // Counter-attack — speed game ONLY on equal class
+      const counterCls = attackMoves[0]?.cls || 'D';
+      const isEqualClash = counterCls === lastAttackCls;
+      const counterHit = HIT_VALUES[counterCls] || 20;
+
+      if (isEqualClash) {
+        const nums = randomNumbers(3, 1, 10);
+        lines.push(`⚡ EQUAL CLASH — Both moves are ${counterCls} class! SPEED GAME triggered.`);
+        lines.push(`Numbers: [${nums.join(', ')}]`);
+        lines.push(`Both players pick privately. Highest wins — deals full ${counterHit} damage. Luck Master = auto-win.`);
+      } else {
+        const diff = classIndex(counterCls) - classIndex(lastAttackCls);
+        if (diff > 0) {
+          const counterDmg = counterHit;
+          const reducedDmg = Math.round(lastAttackHit * 0.3);
+          if (isP1Acting) { newP1HP = clamp(actingHP - reducedDmg); newP2HP = clamp(opposingHP - counterDmg); }
+          else { newP2HP = clamp(actingHP - reducedDmg); newP1HP = clamp(opposingHP - counterDmg); }
+          totalDmgDealt = counterDmg;
+          lines.push(`💥 COUNTER OUTCLASSES ATTACK — ${counterCls} > ${lastAttackCls}!`);
+          lines.push(`${actingPlayer.characterName} takes reduced ${reducedDmg} dmg. ${opposingPlayer.characterName} takes ${counterDmg} counter dmg!`);
+        } else {
+          const partialDmg = Math.round(lastAttackHit * (0.4 + Math.abs(diff) * 0.1));
+          if (isP1Acting) newP1HP = clamp(actingHP - partialDmg);
+          else newP2HP = clamp(actingHP - partialDmg);
+          totalDmgDealt = partialDmg;
+          lines.push(`💢 ATTACK OUTCLASSES COUNTER — ${lastAttackCls} > ${counterCls}.`);
+          lines.push(`${actingPlayer.characterName} takes ${partialDmg} damage (reduced from ${lastAttackHit}).`);
+        }
+      }
     }
 
-    const lastMeta = lookupMove(lastAttackText);
-    if (lastMeta?.instinct || lastMeta?.fa) {
+    if (lastAttackMeta?.instinct || lastAttackMeta?.fa) {
       lines.push(``);
-      lines.push(`⚡ 2FA WINDOW — ${opposingPlayer.characterName} may respond with a skill, counter, or TRAP.`);
-      lines.push(`Type "trap: [name]" to trigger a submitted trap. Time: 5 mins.`);
+      lines.push(`⚡ 2FA WINDOW — ${opposingPlayer.characterName} may respond. Time: 5 mins.`);
+      lines.push(`Type "trap: [name]" to trigger a submitted trap.`);
+    }
+
+    // Trap turn reminder for acting player
+    const actingCanTrap = isP1Acting ? p1TrapTurns.includes(currentTurnNum) : p2TrapTurns.includes(currentTurnNum);
+    if (actingCanTrap) {
+      lines.push(``);
+      lines.push(`🪤 Turn ${currentTurnNum} — ${actingPlayer.characterName} CAN update traps this turn (TRAPS tab).`);
     }
 
   } else {
     // ── ATTACK PHASE ──────────────────────────────────────
+
+    // ── CLONE DAMAGE CALCULATION ──────────────────────────
+    const cloneMatch = playerAction.match(/(\d+)\s*(?:shadow\s*)?clones?\s*(?:all\s*)?(?:use|attack|play|cast)/i)
+      || playerAction.match(/(?:use|deploy|send)\s*(\d+)\s*clones?/i);
+    const cloneCount = cloneMatch ? parseInt(cloneMatch[1]) : 0;
+
     if (attackMoves.length > 0) {
-      lines.push(`⚔️ ${actingPlayer.characterName} commits ${attackMoves.length} move(s).`);
+      if (cloneCount > 0) {
+        lines.push(`👥 CLONE ATTACK — ${actingPlayer.characterName} deploys ${cloneCount} clone(s)!`);
+        lines.push(``);
+        attackMoves.forEach(m => {
+          const totalDmg = m.dmg * cloneCount;
+          const totalAfter = m.afterDmg * cloneCount;
+          lines.push(`📊 ${m.name} [${m.cls}] × ${cloneCount} clones = ${totalDmg} total dmg${totalAfter > 0 ? ` + ${totalAfter} after-dmg (${m.afterType})` : ''}`);
+        });
+        lines.push(``);
+        lines.push(`⚠️ 1 evade covers ALL clones (collaborative evade). Countering = face COMBINED damage.`);
+        lines.push(``);
+      }
+
+      lines.push(`⚔️ ${actingPlayer.characterName} commits ${attackMoves.length} move(s)${cloneCount > 0 ? ` with ${cloneCount} clones` : ''}.`);
       lines.push(``);
+
+      const oppCanTrap = isP1Acting ? p2TrapTurns.includes(currentTurnNum) : p1TrapTurns.includes(currentTurnNum);
       lines.push(`${opposingPlayer.characterName} — RESPONSE PHASE (10 mins). Options:`);
       lines.push(`• Defend with a deck move`);
-      lines.push(`• Counter-attack (triggers speed game)`);
-      lines.push(`• Evade (disabled if invisible attack)`);
-      lines.push(`• Use a 2FA skill (negate, bulletproof, merciful, switch clap, adrenaline, etc.)`);
-      lines.push(`• No deck counter? Type "trap: [move name]" to trigger a submitted TRAP as 2FA`);
+      lines.push(`• Counter of EQUAL class = SPEED GAME | Different class = class comparison`);
+      lines.push(`• Evade (disabled if invisible attack or Hidden Mist)`);
+      lines.push(`• 2FA skill: negate, bulletproof, merciful, switch clap, adrenaline, time, etc.`);
+      if (oppCanTrap) lines.push(`• 🪤 Turn ${currentTurnNum} — you CAN set/update traps this turn (TRAPS tab)`);
+      lines.push(`• No deck counter? Type "trap: [move name]" to trigger a TRAP as 2FA`);
       lines.push(`• Take the hit`);
 
       const hasFAMove = attackMoves.some(m => m.meta?.instinct || m.meta?.fa);
       if (hasFAMove) {
         lines.push(``);
-        lines.push(`⚡ 2FA ENABLED — ${actingPlayer.characterName} may respond after ${opposingPlayer.characterName}'s action. Time: 5 mins.`);
+        lines.push(`⚡ 2FA ENABLED — ${actingPlayer.characterName} may respond after. Time: 5 mins.`);
       }
 
       const hasGenjutsu = subMoves.some(m => m.meta?.type === 'genjutsu');
       if (hasGenjutsu) {
         const gMove = subMoves.find(m => m.meta?.type === 'genjutsu');
         lines.push(``);
-        lines.push(`🌀 GENJUTSU ACTIVE — Activates next turn. Use Genjutsu Kai (equal/higher class) to break out.`);
-        if (gMove?.meta?.kkgType) {
-          lines.push(`⚠️ KKG Genjutsu — Mirror Heaven CANNOT reflect this.`);
-        }
+        lines.push(`🌀 GENJUTSU ACTIVE — Activates next turn. Break with Genjutsu Kai (equal/higher class).`);
+        if (gMove?.meta?.kkgType) lines.push(`⚠️ KKG Genjutsu — Mirror Heaven CANNOT reflect.`);
       }
 
       if (opposingTraps.length > 0) {
@@ -1420,15 +1470,6 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
     battle.player1Name || 'P1',
     battle.player2Name || 'P2'
   ));
-
-  // ── NEXT ACTION PROMPT ──────────────────────────────────────
-  if (phase === 'attack' && attackMoves.length > 0) {
-    lines.push(``);
-    lines.push(`[NEXT] ⏳ ${opposingPlayer.characterName} — type your DEFENSE or COUNTER in the battle input below.`);
-  } else if (phase === 'response') {
-    lines.push(``);
-    lines.push(`[NEXT] ⏳ ${actingPlayer.characterName} — it is now your ATTACK turn. Type your move below.`);
-  }
 
   return lines.join('\n');
 };
