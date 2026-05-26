@@ -27,7 +27,7 @@ router.post('/create', auth, async (req, res) => {
       player1Name: player.characterName,
       player2Name: opponent.characterName,
       battleType: battleType || 'official',
-      maxTurns: battleType === 'sparring' ? 5 : 10,
+      maxTurns: 10,
       currentTurn: 1,
       whoseTurn: player._id,
       status: 'active',
@@ -223,6 +223,31 @@ router.post('/:id/action', auth, async (req, res) => {
     const { action, cardsUsed, phase } = req.body;
     if (!action) return res.status(400).json({ error: 'Action required' });
 
+    // ── WHOSE TURN ENFORCEMENT ────────────────────────────────
+    // Coin toss at the very start is exempt — either player can call it
+    const _actionLowerCheck = action.toLowerCase().trim();
+    const _isCoinTossAction = (_actionLowerCheck === 'heads' || _actionLowerCheck === 'tails' ||
+                               _actionLowerCheck.includes('i call heads') || _actionLowerCheck.includes('i call tails'))
+                              && battle.currentTurn === 1 && battle.turns.length === 0;
+
+    if (!_isCoinTossAction) {
+      if (battle.phase === 'attack') {
+        // Only the player whose turn it is may attack
+        const _expectedAttacker = battle.whoseTurn?.toString();
+        if (_expectedAttacker && req.user._id.toString() !== _expectedAttacker) {
+          const _expectedName = _expectedAttacker === battle.player1._id.toString() ? battle.player1Name : battle.player2Name;
+          return res.status(403).json({ error: `It is not your turn. Waiting for ${_expectedName} to attack.` });
+        }
+      } else if (battle.phase === 'response') {
+        // Only the player who did NOT submit the most recent action may respond
+        const _lastTurnEntry = battle.turns[battle.turns.length - 1];
+        const _lastActorId = _lastTurnEntry?.playerId?.toString();
+        if (_lastActorId && req.user._id.toString() === _lastActorId) {
+          return res.status(403).json({ error: 'You already acted this phase. Wait for your opponent to respond.' });
+        }
+      }
+    }
+
     // ── COIN TOSS HANDLING ────────────────────────────────────
     const actionLower = action.toLowerCase().trim();
     const isCoinToss = actionLower === 'heads' || actionLower === 'tails' || 
@@ -260,18 +285,60 @@ router.post('/:id/action', auth, async (req, res) => {
       if (actingDeck.kkgCard?.name) allowedNames.add(actingDeck.kkgCard.name.toLowerCase().trim());
       if (actingDeck.tailedBeast?.name) allowedNames.add(actingDeck.tailedBeast.name.toLowerCase().trim());
       if (actingDeck.summoningBeast?.name) allowedNames.add(actingDeck.summoningBeast.name.toLowerCase().trim());
+
+      // Bonus skills are always allowed (they're universal, not deck-specific)
+      const BONUS_SKILLS = ['negate','shield','bulletproof','speed','active','time-time','heightened sense',
+        'old flame','nature','erase','crystal','health','king of luck'];
+      BONUS_SKILLS.forEach(b => allowedNames.add(b));
+
       // Basic essentials always allowed
       ['punch','kick','block','slash','throw','evade','dodge','genjutsu kai','substitution jutsu',
-       'heads','tails','coin','trap:','activate'].forEach(be => allowedNames.add(be));
+       'clone sub','skip','set trap','counter','heads','tails','coin','trap:','activate',
+       'contingency','2fa','3fa','no 2fa'].forEach(be => allowedNames.add(be));
 
-      // Check cardsUsed array
+      // --- Check the explicit cardsUsed array ---
       const cardViolations = (cardsUsed || [])
         .filter(c => c.name && !allowedNames.has(c.name.toLowerCase().trim()))
         .map(c => c.name);
 
-      if (cardViolations.length > 0) {
-        deckViolationWarning = `\n\n⚠️ DECK VIOLATION — ${actingPlayer.characterName} used card(s) NOT in submitted deck:\n${cardViolations.map(v => `• ${v}`).join('\n')}\nThese cards are INVALID this turn.`;
+      // --- Also parse the free-text action for move names ---
+      // Build a lookup set of all move names from the MOVE_DB (known moves)
+      // We extract anything after "activate", "summon", "use" keywords and check each line
+      const actionLines = action.split(/[\n,]+/).map(l => l.trim().toLowerCase()).filter(Boolean);
+      const textViolations = [];
+      for (const line of actionLines) {
+        // Strip common prefixes to get the card name
+        const stripped = line
+          .replace(/^activate\s+/i, '')
+          .replace(/^summon\s+/i, '')
+          .replace(/^create\s+\d+\s+\S*\s*clones?\s*/i, '')
+          .replace(/^all\s+\S+\s+clones?\s*:/i, '')
+          .replace(/^set\s+traps?\s*/i, '')
+          .replace(/^instant\s+/i, '')
+          .replace(/\s+(SSS|SS|S|A|B|C|D|E|Z)\d*$/i, '')
+          .trim();
+
+        if (!stripped || stripped.length < 3) continue;
+
+        // Check if it matches any allowed deck card or always-allowed keyword
+        const isAllowed = [...allowedNames].some(allowed => stripped.includes(allowed) || allowed.includes(stripped));
+        // Only flag if the line clearly refers to a specific named move (contains a capital letter or known suffix)
+        const looksLikeMove = /activate|summon|jutsu|mode|rasengan|chidori|tbb|hvt|chakra|bijuu|sage|manda|zephyr/.test(stripped);
+        if (looksLikeMove && !isAllowed) {
+          // Extra check: is it a basic essential or generic action?
+          const isGeneric = ['skip','counter','yes','no','2fa','3fa','trap','set','all','clone sub'].some(g => stripped.startsWith(g));
+          if (!isGeneric) {
+            textViolations.push(stripped);
+          }
+        }
       }
+
+      const allViolations = [...new Set([...cardViolations, ...textViolations])];
+      if (allViolations.length > 0) {
+        deckViolationWarning = `\n\n⚠️ DECK VIOLATION — ${actingPlayer.characterName} attempted to use card(s) NOT in their submitted deck:\n${allViolations.map(v => `• ${v}`).join('\n')}\nThese moves are INVALID and will not count this turn. Deck must be submitted before the match and cannot be changed mid-battle.`;
+      }
+    } else if (!deckSubmitted) {
+      deckViolationWarning = `\n\n⚠️ DECK NOT SUBMITTED — ${actingPlayer.characterName} has not submitted a private deck. All moves are unverified. Please submit your deck via the DECK tab immediately.`;
     }
 
     // Add player message
@@ -286,13 +353,14 @@ router.post('/:id/action', auth, async (req, res) => {
       cardsUsed: cardsUsed || [],
     };
 
-    // Pass player identity clearly to moderator
+    // Pass player identity and deck clearly to moderator
     const aiResponse = await moderateTurn(
       battle,
       action,
       actingPlayer,
       opposingPlayer,
-      isPlayer1 ? 'player1' : 'player2'
+      isPlayer1 ? 'player1' : 'player2',
+      actingDeck  // ← deck passed so moderator can validate moves inline
     );
     const fullAiResponse = deckViolationWarning ? aiResponse + deckViolationWarning : aiResponse;
 
