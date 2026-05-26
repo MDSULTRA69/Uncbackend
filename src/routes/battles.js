@@ -291,6 +291,14 @@ router.post('/:id/action', auth, async (req, res) => {
         'old flame','nature','erase','crystal','health','king of luck'];
       BONUS_SKILLS.forEach(b => allowedNames.add(b));
 
+      // Sage Mode — allowed if it's in the player's deck specials
+      if (actingDeck.sageMode?.type) {
+        allowedNames.add('sage mode');
+        allowedNames.add('heavenly sage mode');
+        allowedNames.add('devil sage mode');
+        allowedNames.add('sage');
+      }
+
       // Basic essentials always allowed
       ['punch','kick','block','slash','throw','evade','dodge','genjutsu kai','substitution jutsu',
        'clone sub','skip','set trap','counter','heads','tails','coin','trap:','activate',
@@ -446,6 +454,51 @@ router.post('/:id/spin', auth, async (req, res) => {
     const { spinType } = req.body;
     const result = await generateSpinResult(spinType, req.user);
     res.json({ result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ── UPDATE PLAYER STATUS (active power-ups, effects, clones, summonings) ──────
+// Called when a player activates/deactivates a power-up (Sage Mode, Armor, Prime, etc.)
+// This is what the AI moderator reads to determine damage multipliers (NB4).
+
+router.post('/:id/update-status', auth, async (req, res) => {
+  try {
+    const battle = await Battle.findById(req.params.id);
+    if (!battle) return res.status(404).json({ error: 'Battle not found' });
+    if (battle.status !== 'active') return res.status(400).json({ error: 'Battle is not active' });
+
+    const isPlayer1 = battle.player1.toString() === req.user._id.toString();
+    const isPlayer2 = battle.player2.toString() === req.user._id.toString();
+    if (!isPlayer1 && !isPlayer2) return res.status(403).json({ error: 'You are not in this battle' });
+
+    const { activated, effects, clones, summonings } = req.body;
+
+    // Initialise boardState if missing
+    if (!battle.boardState) battle.boardState = { player1: {}, player2: {} };
+    const side = isPlayer1 ? 'player1' : 'player2';
+
+    if (Array.isArray(activated))   battle.boardState[side].activated   = activated;
+    if (Array.isArray(effects))     battle.boardState[side].effects     = effects;
+    if (typeof clones === 'string') battle.boardState[side].clones      = clones;
+    if (Array.isArray(summonings))  battle.boardState[side].summonings  = summonings;
+
+    // Mark the boardState as modified (mongoose mixed type needs this)
+    battle.markModified('boardState');
+
+    const playerName = isPlayer1 ? battle.player1Name : battle.player2Name;
+    const activatedList = (activated || []).join(', ') || 'none';
+    battle.chatLog.push({
+      sender: req.user._id,
+      senderName: 'AI-MOD',
+      message: `📋 ${playerName} status updated — Active: ${activatedList}`,
+      type: 'ai-mod',
+    });
+
+    await battle.save();
+    res.json({ message: 'Status updated.', boardState: battle.boardState });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
