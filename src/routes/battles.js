@@ -88,24 +88,7 @@ router.post('/:id/submit-deck', auth, async (req, res) => {
     });
 
     await battle.save();
-
-    // Build a summary of the saved deck to confirm back to the submitting player
-    const savedDeck = isPlayer1 ? battle.player1Deck : battle.player2Deck;
-    const deckSummary = {
-      ninjutsuGenjutsu: (savedDeck.ninjutsuGenjutsu || []).map(c => ({ name: c.name, class: c.class })),
-      skills:           (savedDeck.skills || []).map(c => ({ name: c.name, class: c.class })),
-      weaponBag:        (savedDeck.weaponBag || []).map(c => ({ name: c.name, class: c.class })),
-      kkgCard:          savedDeck.kkgCard   ? { name: savedDeck.kkgCard.name,   class: savedDeck.kkgCard.class   } : null,
-      tailedBeast:      savedDeck.tailedBeast    ? { name: savedDeck.tailedBeast.name,    class: savedDeck.tailedBeast.class    } : null,
-      summoningBeast:   savedDeck.summoningBeast ? { name: savedDeck.summoningBeast.name, class: savedDeck.summoningBeast.class } : null,
-    };
-
-    res.json({
-      message: 'Deck submitted privately.',
-      playerLabel: isPlayer1 ? 'P1' : 'P2',
-      playerName,
-      deck: deckSummary,
-    });
+    res.json({ message: 'Deck submitted privately.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -202,11 +185,9 @@ router.get('/:id', auth, async (req, res) => {
     if (isPlayer1) {
       battleObj.player2Deck = null;
       battleObj.player2Traps = (battle.player2Traps || []).map(() => ({ name: '🔒 Hidden', class: '?' }));
-      // Keep player1Deck intact so P1 can see their own submitted deck
     } else if (isPlayer2) {
       battleObj.player1Deck = null;
       battleObj.player1Traps = (battle.player1Traps || []).map(() => ({ name: '🔒 Hidden', class: '?' }));
-      // Keep player2Deck intact so P2 can see their own submitted deck
     } else {
       battleObj.player1Deck = null;
       battleObj.player2Deck = null;
@@ -215,35 +196,6 @@ router.get('/:id', auth, async (req, res) => {
     }
 
     res.json({ battle: battleObj });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-// ── GET MY OWN DECK ──────────────────────────────────────────
-
-router.get('/:id/my-deck', auth, async (req, res) => {
-  try {
-    const battle = await Battle.findById(req.params.id);
-    if (!battle) return res.status(404).json({ error: 'Battle not found' });
-    const isPlayer1 = battle.player1.toString() === req.user._id.toString();
-    const isPlayer2 = battle.player2.toString() === req.user._id.toString();
-    if (!isPlayer1 && !isPlayer2) return res.status(403).json({ error: 'Not in this battle' });
-    const myDeck      = isPlayer1 ? battle.player1Deck : battle.player2Deck;
-    const mySubmitted = isPlayer1 ? battle.player1DeckSubmitted : battle.player2DeckSubmitted;
-    const myName      = isPlayer1 ? battle.player1Name : battle.player2Name;
-    const myLabel     = isPlayer1 ? 'P1' : 'P2';
-    if (!myDeck || !mySubmitted) return res.json({ submitted: false, playerLabel: myLabel, playerName: myName, deck: null });
-    const deckSummary = {
-      ninjutsuGenjutsu: (myDeck.ninjutsuGenjutsu || []).map(c => ({ name: c.name, class: c.class })),
-      skills:           (myDeck.skills || []).map(c => ({ name: c.name, class: c.class })),
-      weaponBag:        (myDeck.weaponBag || []).map(c => ({ name: c.name, class: c.class })),
-      kkgCard:          myDeck.kkgCard        ? { name: myDeck.kkgCard.name,        class: myDeck.kkgCard.class        } : null,
-      tailedBeast:      myDeck.tailedBeast    ? { name: myDeck.tailedBeast.name,    class: myDeck.tailedBeast.class    } : null,
-      summoningBeast:   myDeck.summoningBeast ? { name: myDeck.summoningBeast.name, class: myDeck.summoningBeast.class } : null,
-    };
-    res.json({ submitted: true, playerLabel: myLabel, playerName: myName, deck: deckSummary });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -273,30 +225,22 @@ router.post('/:id/action', auth, async (req, res) => {
 
     // ── COIN TOSS HANDLING ────────────────────────────────────
     const actionLower = action.toLowerCase().trim();
-    const isCoinTossInput = actionLower === 'heads' || actionLower === 'tails' ||
-                            actionLower.includes('i call heads') || actionLower.includes('i call tails');
-
-    // Guard: if coin toss not yet done, ONLY accept heads/tails — reject everything else
-    if (!battle.coinTossCompleted) {
-      if (!isCoinTossInput) {
-        return res.status(400).json({
-          error: 'Waiting for coin toss. Please type HEADS or TAILS to determine who goes first.'
-        });
-      }
-
+    const isCoinToss = actionLower === 'heads' || actionLower === 'tails' || 
+                       actionLower.includes('i call heads') || actionLower.includes('i call tails');
+    
+    if (isCoinToss && battle.currentTurn === 1 && battle.turns.length === 0) {
       const result = Math.random() < 0.5 ? 'HEADS' : 'TAILS';
       const call = actionLower.includes('tail') ? 'TAILS' : 'HEADS';
-      const p1Wins = call === result;
-      const firstPlayer    = p1Wins ? battle.player1Name : battle.player2Name;
-      const firstPlayerId  = p1Wins ? battle.player1._id : battle.player2._id;
+      const p1WonToss = call === result;
+      // Winner of toss goes first
+      const firstPlayer = p1WonToss ? battle.player1Name : battle.player2Name;
+      const firstPlayerId = p1WonToss ? battle.player1._id : battle.player2._id;
 
-      battle.whoseTurn         = firstPlayerId;
-      battle.coinTossCompleted = true;
-      battle.phase             = 'attack';
+      battle.whoseTurn = firstPlayerId;
 
       battle.chatLog.push({ sender: req.user._id, senderName: actingPlayer.characterName, message: action, type: 'player' });
 
-      const coinMsg = `🪙 COIN TOSS RESULT: ${result}!\n${actingPlayer.characterName} called ${call.toUpperCase()} — ${call === result ? '✅ CORRECT!' : '❌ WRONG!'}\n\n⚔️ ${firstPlayer} goes FIRST!\n\n🪤 Both players: submit your traps via the TRAPS tab before Turn 1 begins.\nTurn 1 | Phase: ATTACK`;
+      const coinMsg = `🪙 COIN TOSS RESULT: ${result}!\n${actingPlayer.characterName} called ${call} — ${call === result ? '✅ CORRECT! You go first!' : '❌ WRONG! Opponent goes first.'}\n\n⚔️ ${firstPlayer} goes FIRST!\n\n🪤 Both players: submit traps via TRAPS tab before acting.\nTurn 1 | Phase: ATTACK — ${firstPlayer} to act.`;
 
       battle.chatLog.push({ sender: req.user._id, senderName: 'AI-MOD', message: coinMsg, type: 'ai-mod' });
 
@@ -308,7 +252,7 @@ router.post('/:id/action', auth, async (req, res) => {
     let deckViolationWarning = '';
     const deckSubmitted = isPlayer1 ? battle.player1DeckSubmitted : battle.player2DeckSubmitted;
 
-    if (deckSubmitted && actingDeck && cardsUsed?.length > 0) {
+    if (deckSubmitted && actingDeck) {
       const allowedNames = new Set();
       (actingDeck.ninjutsuGenjutsu || []).forEach(c => c.name && allowedNames.add(c.name.toLowerCase().trim()));
       (actingDeck.skills || []).forEach(c => c.name && allowedNames.add(c.name.toLowerCase().trim()));
@@ -316,14 +260,17 @@ router.post('/:id/action', auth, async (req, res) => {
       if (actingDeck.kkgCard?.name) allowedNames.add(actingDeck.kkgCard.name.toLowerCase().trim());
       if (actingDeck.tailedBeast?.name) allowedNames.add(actingDeck.tailedBeast.name.toLowerCase().trim());
       if (actingDeck.summoningBeast?.name) allowedNames.add(actingDeck.summoningBeast.name.toLowerCase().trim());
-      ['punch','kick','block','slash','throw','evade','genjutsu kai','substitution jutsu'].forEach(be => allowedNames.add(be));
+      // Basic essentials always allowed
+      ['punch','kick','block','slash','throw','evade','dodge','genjutsu kai','substitution jutsu',
+       'heads','tails','coin','trap:','activate'].forEach(be => allowedNames.add(be));
 
-      const violations = (cardsUsed || [])
+      // Check cardsUsed array
+      const cardViolations = (cardsUsed || [])
         .filter(c => c.name && !allowedNames.has(c.name.toLowerCase().trim()))
         .map(c => c.name);
 
-      if (violations.length > 0) {
-        deckViolationWarning = `\n\n⚠️ DECK VIOLATION — ${actingPlayer.characterName} used card(s) NOT in their submitted deck:\n${violations.map(v => `• ${v}`).join('\n')}\nThese cards are INVALID this turn.`;
+      if (cardViolations.length > 0) {
+        deckViolationWarning = `\n\n⚠️ DECK VIOLATION — ${actingPlayer.characterName} used card(s) NOT in submitted deck:\n${cardViolations.map(v => `• ${v}`).join('\n')}\nThese cards are INVALID this turn.`;
       }
     }
 
