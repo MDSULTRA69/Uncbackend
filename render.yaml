@@ -2,7 +2,7 @@ services:
   - type: web
     name: unc-backend
     env: node
-    buildCommand: npm install --legacy-peer-deps
+    buildCommand: npm install
     startCommand: npm start
     envVars:
       - key: MONGODB_URI
