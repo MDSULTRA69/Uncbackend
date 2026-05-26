@@ -732,6 +732,45 @@ const MOVE_DB = {
   },
 };
 
+// ── DAMAGE MULTIPLIER RULES (NB4) ────────────────────────────
+// SR          = 1          (base damage only, no multiplier)
+// Armor SR    = 1          (same as SR)
+// LR / Prime SR = Class    (base × class index+1, i.e. rank)
+// Armor LR / Sage LR = Class × Class
+// Prime LR / Sage Prime LR = Class × Class × Class
+//
+// ── COVER RULES (NB5) — LR people coverage ───────────────────
+// E=1, D=2, C=3, B=4, A=5, S=6, SS=7, SSS=8
+// A LR move can only hit this many distinct targets simultaneously.
+// Clones each count as 1 target. Summoned beasts count as 1 target.
+
+const LR_COVER = { E: 1, D: 2, C: 3, B: 4, A: 5, S: 6, SS: 7, SSS: 8, Z: 9 };
+
+// Returns how many people/targets an LR move of given class can cover
+function lrCoverage(cls) { return LR_COVER[cls] || 1; }
+
+// Returns the damage multiplier based on move type
+// moveVariant: 'SR' | 'armor_sr' | 'LR' | 'prime_sr' | 'armor_lr' | 'sage_lr' | 'prime_lr' | 'sage_prime_lr'
+function dmgMultiplier(cls, moveVariant = 'SR') {
+  const ci = CLASS_ORDER.indexOf(cls ?? 'E') + 1; // 1-based class index
+  switch (moveVariant.toLowerCase()) {
+    case 'sr':
+    case 'armor_sr':
+      return 1;
+    case 'lr':
+    case 'prime_sr':
+      return ci;                // Class
+    case 'armor_lr':
+    case 'sage_lr':
+      return ci * ci;           // Class × Class
+    case 'prime_lr':
+    case 'sage_prime_lr':
+      return ci * ci * ci;      // Class × Class × Class
+    default:
+      return 1;
+  }
+}
+
 // ── HELPERS ───────────────────────────────────────────────────
 function classIndex(cls) { return CLASS_ORDER.indexOf(cls ?? 'E'); }
 function clamp(val, min = 0, max = 100) { return Math.max(min, Math.min(max, val)); }
@@ -770,10 +809,58 @@ function extractRank(text = '') {
   return m ? parseInt(m[1]) : 1;
 }
 
+// ── RESOLVE MOVE VARIANT FROM META + ACTIVE POWER-UPS (NB4) ─
+// This is the authoritative way to determine damage multiplier.
+// We look at the move's own range from MOVE_DB, then check what
+// power-ups the player has active to upgrade the variant.
+//
+// Power-up upgrade rules:
+//   Base SR  + Sage Mode  → Sage SR  (still ×1, sage doesn't change SR formula)
+//   Base SR  + Armor      → Armor SR (×1)
+//   Base SR  + Prime      → Prime SR (×Class)  ← Prime turns SR into class-scaled
+//   Base LR  + (nothing)  → LR       (×Class)
+//   Base LR  + Armor      → Armor LR (×Class²)
+//   Base LR  + Sage       → Sage LR  (×Class²)
+//   Base LR  + Prime      → Prime LR (×Class³)
+//   Base LR  + Sage+Prime → Sage Prime LR (×Class³)
+// deckCard = the card object from the player's submitted deck (has .range and .armored)
+// moveMeta = entry from MOVE_DB (has .attack.range)
+// activatedPowerUps = battle.boardState.playerX.activated array
+// sageMode = battle player's deck.sageMode object { type, charges }
+function resolveMoveVariant(moveMeta, activatedPowerUps = [], deckCard = null, sageMode = null) {
+  const ups = (activatedPowerUps || []).map(p => p.toLowerCase());
+
+  // Sage Mode: active if player has sageMode in deck AND it appears in activatedPowerUps
+  const hasSage  = sageMode?.type && ups.some(p => p.includes('sage'));
+  const hasPrime = ups.some(p => p.includes('prime'));
+
+  // Armored: comes directly from the deck card's .armored flag (set in deck builder)
+  // NOT from keywords or MOVE_DB — the player explicitly marked this move as armored
+  const hasArmor = deckCard?.armored === true;
+
+  // Range: prefer deck card's explicit .range over MOVE_DB fallback
+  // Player set SR or LR in deck builder for each move
+  const baseRange = deckCard?.range || moveMeta?.attack?.range || 'SR';
+  const isLR = baseRange === 'LR';
+
+  if (isLR) {
+    if (hasSage && hasPrime) return 'sage_prime_lr';
+    if (hasPrime)            return 'prime_lr';
+    if (hasSage)             return 'sage_lr';
+    if (hasArmor)            return 'armor_lr';
+    return 'LR';
+  } else {
+    if (hasPrime) return 'prime_sr';
+    if (hasArmor) return 'armor_sr';
+    return 'SR';
+  }
+}
+
 function calcDamage(cls, rank = 1, modifiers = {}) {
   const baseDmg = HIT_VALUES[cls] || 10;
-  const { isLR = false } = modifiers;
-  const multiplier = isLR ? rank : 1;
+  // moveVariant should come from resolveMoveVariant(), not keywords
+  const variant = modifiers.moveVariant || (modifiers.isLR ? 'LR' : 'SR');
+  const multiplier = dmgMultiplier(cls, variant);
   const dmg = Math.round(baseDmg * multiplier);
   const afterPct = (modifiers.bleed || 0) + (modifiers.burn || 0) + (modifiers.linger || 0);
   const afterDmg = Math.round(baseDmg * afterPct);
@@ -781,7 +868,10 @@ function calcDamage(cls, rank = 1, modifiers = {}) {
     : modifiers.bleed ? 'bleed'
     : modifiers.burn ? 'burn'
     : modifiers.linger ? 'linger' : null;
-  return { dmg, afterDmg, afterType };
+  // Coverage for LR moves (NB5)
+  const isLR = variant !== 'SR' && variant !== 'armor_sr';
+  const covers = isLR ? lrCoverage(cls) : null;
+  return { dmg, afterDmg, afterType, covers, multiplier, variant };
 }
 
 // ── 2FA OUTCOME RESOLVER ─────────────────────────────────────
@@ -1428,17 +1518,48 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
     const meta = move.meta;
     const cls  = move.cls || 'D';
     const rank = move.rank || 1;
-    const isLR = meta?.attack?.range === 'LR' || playerAction.toLowerCase().includes('long range');
-    const { dmg, afterDmg, afterType } = calcDamage(cls, rank, {
-      isLR,
+    // Derive move variant from deck card data + active power-ups (NB4)
+    // range and armored come from the deck builder (player explicitly set them)
+    // sageMode comes from the player's deck special cards
+    const activatedPowerUps = isP1Acting
+      ? (battle.boardState?.player1?.activated || [])
+      : (battle.boardState?.player2?.activated || []);
+
+    // Find this specific card in the player's submitted deck to get .range and .armored
+    const deckToSearch = actingPlayerDeck;
+    const deckCard = [
+      ...(deckToSearch?.ninjutsuGenjutsu || []),
+      ...(deckToSearch?.weaponBag || []),
+    ].find(c => c.name && move.name.toLowerCase().includes(c.name.toLowerCase()));
+
+    // Sage Mode from deck specials
+    const sageMode = actingPlayerDeck?.sageMode?.type ? actingPlayerDeck.sageMode : null;
+
+    const moveVariant = resolveMoveVariant(meta, activatedPowerUps, deckCard, sageMode);
+
+    const { dmg, afterDmg, afterType, covers, multiplier } = calcDamage(cls, rank, {
+      moveVariant,
       bleed: meta?.bleed,
       burn: meta?.burn,
       linger: meta?.linger
     });
 
-    attackMoves.push({ number: moveNumber, name: move.name, cls, rank, dmg, afterDmg, afterType, meta });
+    attackMoves.push({ number: moveNumber, name: move.name, cls, rank, dmg, afterDmg, afterType, covers, moveVariant, meta });
 
-    let desc = `${moveNumber}) ${move.name} [${cls}${rank > 1 ? ` rank ${rank}` : ''}] — ${isLR ? 'LR' : 'SR'}, ${dmg} dmg`;
+    // NB4: show multiplier formula
+    const ciVal = CLASS_ORDER.indexOf(cls) + 1;
+    const variantLabel = {
+      SR: 'SR (×1)', armor_sr: 'Armor SR (×1)',
+      LR: `LR (×${ciVal} = class)`,
+      prime_sr: `Prime SR (×${ciVal} = class)`,
+      armor_lr: `Armor LR (×${ciVal*ciVal} = class²)`,
+      sage_lr: `Sage LR (×${ciVal*ciVal} = class²)`,
+      prime_lr: `Prime LR (×${ciVal*ciVal*ciVal} = class³)`,
+      sage_prime_lr: `Sage Prime LR (×${ciVal*ciVal*ciVal} = class³)`,
+    }[moveVariant] || moveVariant;
+
+    let desc = `${moveNumber}) ${move.name} [${cls} rank ${rank}] — ${variantLabel} → ${dmg} dmg`;
+    if (covers) desc += ` | covers up to ${covers} target(s)`;
     if (afterDmg > 0 && afterType) desc += ` + ${afterDmg} after-dmg (${afterType})`;
     if (meta?.invisible) desc += ` ⚠️ INVISIBLE — evade & melee-counter disabled`;
     if (meta?.stunAll) desc += ` ⚠️ STUN ALL (unless in deck)`;
@@ -1532,7 +1653,19 @@ const moderateTurn = async (battle, playerAction, actingPlayer, opposingPlayer, 
         attackMoves.forEach(m => {
           const totalDmg = m.dmg * cloneCount;
           const totalAfter = m.afterDmg * cloneCount;
-          lines.push(`📊 ${m.name} [${m.cls}] × ${cloneCount} clones = ${totalDmg} total dmg${totalAfter > 0 ? ` + ${totalAfter} after-dmg (${m.afterType})` : ''}`);
+          // NB5: LR moves can only cover up to lrCoverage(cls) targets
+          const isLRMove = m.moveVariant && m.moveVariant !== 'SR' && m.moveVariant !== 'armor_sr';
+          const maxTargets = isLRMove ? lrCoverage(m.cls) : null;
+          const effectiveClones = maxTargets ? Math.min(cloneCount, maxTargets) : cloneCount;
+          const cappedDmg = m.dmg * effectiveClones;
+          let cloneDesc = `📊 ${m.name} [${m.cls}] × ${cloneCount} clones`;
+          if (maxTargets && cloneCount > maxTargets) {
+            cloneDesc += ` — ⚠️ LR ${m.cls}-class only covers ${maxTargets} targets (NB5). Only ${effectiveClones} clones hit effectively = ${cappedDmg} dmg (excess clones wasted)`;
+          } else {
+            cloneDesc += ` = ${totalDmg} total dmg`;
+          }
+          if (totalAfter > 0) cloneDesc += ` + ${m.afterDmg * effectiveClones} after-dmg (${m.afterType})`;
+          lines.push(cloneDesc);
         });
         lines.push(``);
         lines.push(`⚠️ 1 evade covers ALL clones (collaborative evade). Countering = face COMBINED damage.`);
